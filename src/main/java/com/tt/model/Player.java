@@ -13,6 +13,7 @@ public class Player {
     @Column(nullable = false) private String passwordHash;
     @Column(nullable = false) private String displayName;
     private String avatarUrl;
+    @Column(length = 512)
     private String fcmToken;
     private int totalMatchesPlayed = 0;
     private int totalMatchesWon = 0;

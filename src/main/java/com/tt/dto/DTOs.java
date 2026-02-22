@@ -74,7 +74,8 @@ public class DTOs {
 
     public static class UpdateFcmTokenRequest {
         private String fcmToken;
-        public String getFcmToken() { return fcmToken; } public void setFcmToken(String v) { fcmToken=v; }
+        public String getFcmToken() { return fcmToken; }
+        public void setFcmToken(String v) { fcmToken=v; }
     }
 
     public static class CustomRankingsRequest {

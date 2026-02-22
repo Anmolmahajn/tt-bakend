@@ -716,7 +716,6 @@ public class TournamentService {
         m.setStatus(Match.MatchStatus.IN_PROGRESS);
         m.setStartedAt(LocalDateTime.now());
         matchRepo.save(m);
-        pushService.notifyMatchStarted(m);
     }
 
     private Match buildMatch(Tournament t, TournamentDay day, TournamentMember m1, TournamentMember m2,
@@ -838,6 +837,8 @@ public class TournamentService {
         postSystemMessage(t, String.format("Match #%d: %s %d-%d %s — %s wins!",
                         m.getMatchNumber(), side1Name, score1, score2, side2Name, winnerName),
                 ChatMessage.MessageType.MATCH_RESULT);
+        pushService.notifyMatchResult(t, String.format("%s %d-%d %s — %s wins!",
+                side1Name, score1, score2, side2Name, winnerName));
         activateNextMatch(m.getDay(), m.getMatchNumber());
         broadcastDay(t.getId(), m.getDay().getId());
         broadcastChat(t.getId());
@@ -852,7 +853,6 @@ public class TournamentService {
                     next.setStatus(Match.MatchStatus.IN_PROGRESS);
                     next.setStartedAt(LocalDateTime.now());
                     matchRepo.save(next);
-                    pushService.notifyMatchStarted(next);
                 });
     }
 
@@ -939,9 +939,6 @@ public class TournamentService {
                     : (mem.getPlayer() != null ? mem.getPlayer().getProficiency() : null);
             entries.add(e);
         }
-        pushService.notifyDayEnded(t, day.getDayNumber());
-        postSystemMessage(t, "Day " + day.getDayNumber() + " ended! Rankings updated.",
-                ChatMessage.MessageType.DAY_ENDED);
         broadcastTournament(tournamentId);
         broadcastChat(tournamentId);
         return entries;
@@ -1067,6 +1064,7 @@ public class TournamentService {
         msg.setContent(content.trim()); msg.setType(ChatMessage.MessageType.TEXT);
         msg = chatRepo.save(msg);
         broadcastChat(tournamentId);
+        pushService.notifyChat(t, sender.getDisplayName(), content.trim());
         return toChatResponse(msg);
     }
 
