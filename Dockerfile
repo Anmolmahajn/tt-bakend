@@ -14,11 +14,18 @@ RUN mvn clean package -DskipTests -B
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
+# Set timezone to IST
+ENV TZ=Asia/Kolkata
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    echo "Asia/Kolkata" > /etc/timezone
+
 # Copy the built JAR from Stage 1
 COPY --from=build /app/target/*.jar app.jar
 
 # Expose the port Spring Boot listens on
 EXPOSE 8080
 
-# Start the app
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Start the app with IST timezone
+# Use shell form so $PORT env var is expanded at runtime (required for Back4App)
+CMD java -Duser.timezone=Asia/Kolkata -Dserver.port=${PORT:-8080} -jar app.jar
