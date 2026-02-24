@@ -48,9 +48,13 @@ public class TournamentService {
 
     @Transactional
     public Tournament createTournament(Player creator, String name, String password) {
-        if (tournamentRepo.existsByName(name)) throw new RuntimeException("Tournament name already taken");
+        // Case-insensitive name check to prevent duplicate-name confusion
+        if (tournamentRepo.existsByNameIgnoreCase(name.trim()))
+            throw new RuntimeException("Tournament name already taken");
         Tournament t = new Tournament();
-        t.setName(name); t.setPasswordHash(passwordEncoder.encode(password)); t.setCreatedBy(creator);
+        t.setName(name.trim());
+        t.setPasswordHash(passwordEncoder.encode(password != null ? password : ""));
+        t.setCreatedBy(creator);
         t.getAdmins().add(creator);
         t = tournamentRepo.save(t);
         TournamentMember m = new TournamentMember();
@@ -63,9 +67,21 @@ public class TournamentService {
 
     @Transactional
     public TournamentMember joinTournament(Player player, String name, String password) {
-        Tournament t = tournamentRepo.findByName(name).orElseThrow(() -> new RuntimeException("Tournament not found"));
-        if (!passwordEncoder.matches(password, t.getPasswordHash())) throw new RuntimeException("Wrong password");
-        if (memberRepo.existsByTournamentAndPlayer(t, player)) throw new RuntimeException("Already in this tournament");
+        // Case-insensitive name lookup so "2027 spinner" finds "2027 Spinner"
+        Tournament t = tournamentRepo.findByNameIgnoreCase(name.trim())
+                .orElseThrow(() -> new RuntimeException("Tournament not found"));
+
+        // Password check — allow blank password tournaments
+        String hash = t.getPasswordHash();
+        if (hash != null && !hash.isBlank()) {
+            if (password == null || !passwordEncoder.matches(password, hash))
+                throw new RuntimeException("Wrong password");
+        }
+
+        // Check membership by player ID (not object identity) to prevent false "already joined"
+        boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
+        if (alreadyMember) throw new RuntimeException("Already in this tournament");
+
         TournamentMember m = new TournamentMember();
         m.setTournament(t); m.setPlayer(player); m.setGuest(false);
         memberRepo.save(m);
@@ -92,7 +108,7 @@ public class TournamentService {
         return m;
     }
 
-    // ── REMOVE MEMBER — full FK-safe delete order ─────────────────────────────
+    // ── REMOVE MEMBER ─────────────────────────────────────────────────────────
     @Transactional
     public void removeMember(Long tournamentId, Player admin, Long memberId) {
         Tournament t = getTournament(tournamentId);
@@ -105,15 +121,11 @@ public class TournamentService {
 
         List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
 
-        // Step 1: For every day, clear the present-members join table row for this member
-        // AND delete every match that involves this member (can't nullify — DB constraint)
         for (TournamentDay day : days) {
-            // Remove from DAY_PRESENT_MEMBERS join table
             day.getPresentMembers().removeIf(pm -> pm.getId().equals(memberId));
             dayRepo.save(day);
             dayRepo.flush();
 
-            // Find all matches that reference this member as player1 or player2
             List<Match> memberMatches = matchRepo.findByDayOrderByMatchNumberAsc(day)
                     .stream()
                     .filter(match ->
@@ -121,7 +133,6 @@ public class TournamentService {
                                     (match.getMember2() != null && match.getMember2().getId().equals(memberId)))
                     .collect(Collectors.toList());
 
-            // Nullify winner ref first (to avoid FK on winner column)
             for (Match match : memberMatches) {
                 if (match.getWinner() != null && match.getWinner().getId().equals(memberId)) {
                     match.setWinner(null);
@@ -129,12 +140,9 @@ public class TournamentService {
                 }
             }
             matchRepo.flush();
-
-            // Now delete those matches entirely
             matchRepo.deleteAll(memberMatches);
             matchRepo.flush();
 
-            // Also remove member from any team's member list (Team @ManyToMany)
             List<Team> teamsInDay = teamRepo.findByDayOrderByMatchesWonDesc(day);
             for (Team team : teamsInDay) {
                 boolean changed = team.getMembers().removeIf(tm -> tm.getId().equals(memberId));
@@ -143,15 +151,10 @@ public class TournamentService {
             teamRepo.flush();
         }
 
-        // Step 2: Nullify winner FK on any remaining matches (e.g. older days not caught above)
         matchRepo.nullifyWinnerIfMember(memberId);
         matchRepo.flush();
-
-        // Step 3: Delete ranking snapshots for this member
         snapshotRepo.deleteByMemberId(memberId);
         snapshotRepo.flush();
-
-        // Step 4: Safe to delete member now
         memberRepo.delete(m);
         memberRepo.flush();
 
@@ -166,7 +169,8 @@ public class TournamentService {
         Tournament t = getTournament(tournamentId);
         if (!t.getCreatedBy().getId().equals(admin.getId()))
             throw new RuntimeException("Only creator can rename");
-        if (tournamentRepo.existsByName(newName)) throw new RuntimeException("Name already taken");
+        if (tournamentRepo.existsByNameIgnoreCase(newName.trim()))
+            throw new RuntimeException("Name already taken");
         t.setName(newName.trim());
         tournamentRepo.save(t);
         broadcastTournament(tournamentId);
@@ -177,11 +181,11 @@ public class TournamentService {
         Tournament t = getTournament(tournamentId);
         if (!t.getCreatedBy().getId().equals(admin.getId()))
             throw new RuntimeException("Only creator can change password");
-        t.setPasswordHash(passwordEncoder.encode(newPassword));
+        t.setPasswordHash(passwordEncoder.encode(newPassword != null ? newPassword : ""));
         tournamentRepo.save(t);
     }
 
-    // ── UPDATE PROFICIENCY (works for both players and guests) ────────────────
+    // ── UPDATE PROFICIENCY ────────────────────────────────────────────────────
 
     @Transactional
     public void updateMemberProficiency(Long tournamentId, Player admin, Long memberId, String proficiency) {
@@ -211,7 +215,6 @@ public class TournamentService {
         List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
 
         for (TournamentDay day : days) {
-            // Clear join table first
             day.getPresentMembers().clear();
             dayRepo.save(day);
             dayRepo.flush();
@@ -255,7 +258,7 @@ public class TournamentService {
         assertAdmin(t, requester);
         Player target = playerRepo.findById(targetPlayerId)
                 .orElseThrow(() -> new RuntimeException("Player not found"));
-        if (!memberRepo.existsByTournamentAndPlayer(t, target))
+        if (!memberRepo.existsByTournamentIdAndPlayerId(t.getId(), target.getId()))
             throw new RuntimeException("Player is not a member");
         if (t.getAdmins().stream().noneMatch(a -> a.getId().equals(target.getId()))) {
             t.getAdmins().add(target);
@@ -284,10 +287,8 @@ public class TournamentService {
         Tournament t = getTournament(tournamentId);
         assertAdmin(t, admin);
 
-        // If there's an existing IN_PROGRESS day, safely close it out first
         dayRepo.findFirstByTournamentAndStatusOrderByDayNumberDesc(t, TournamentDay.DayStatus.IN_PROGRESS)
                 .ifPresent(existing -> {
-                    // Nullify winner refs then delete non-completed matches
                     List<Match> leftover = matchRepo.findByDayOrderByMatchNumberAsc(existing).stream()
                             .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
                             .collect(Collectors.toList());
@@ -295,14 +296,12 @@ public class TournamentService {
                     matchRepo.flush();
                     matchRepo.deleteAll(leftover);
                     matchRepo.flush();
-                    // Clear team member join tables then delete teams
                     teamRepo.findByDayOrderByMatchesWonDesc(existing).forEach(team -> {
                         team.getMembers().clear(); teamRepo.save(team);
                     });
                     teamRepo.flush();
                     teamRepo.deleteAll(teamRepo.findByDayOrderByMatchesWonDesc(existing));
                     teamRepo.flush();
-                    // Clear present members join table
                     existing.getPresentMembers().clear();
                     existing.setStatus(TournamentDay.DayStatus.ENDED);
                     existing.setEndedAt(LocalDateTime.now());
@@ -336,7 +335,6 @@ public class TournamentService {
     }
 
     // ── ADD PLAYER MID-DAY ────────────────────────────────────────────────────
-    // Preserves completed matches, regenerates only remaining SCHEDULED matches
 
     @Transactional
     public TournamentDay addPlayerMidDay(Long tournamentId, Player admin, Long newMemberId) {
@@ -359,29 +357,20 @@ public class TournamentService {
         int completedCount = (int) allMatches.stream()
                 .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
 
-        // Nullify winner refs on non-completed matches before deleting
         List<Match> toDelete = allMatches.stream()
                 .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
                 .collect(Collectors.toList());
-        for (Match match : toDelete) {
-            match.setWinner(null);
-            matchRepo.save(match);
-        }
+        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
         matchRepo.flush();
         matchRepo.deleteAll(toDelete);
         matchRepo.flush();
 
-        // Clear team member join tables before deleting teams
         List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) {
-            team.getMembers().clear();
-            teamRepo.save(team);
-        }
+        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
         teamRepo.flush();
         teamRepo.deleteAll(teams);
         teamRepo.flush();
 
-        // Update present members list
         List<TournamentMember> newPresent = new ArrayList<>(day.getPresentMembers());
         newPresent.add(newMember);
         day.setPresentMembers(newPresent);
@@ -390,8 +379,7 @@ public class TournamentService {
         newMember.setDaysPlayed(newMember.getDaysPlayed() + 1);
         memberRepo.save(newMember);
 
-        TournamentDay.MatchFormat fmt = day.getMatchFormat();
-        generateDayTeamsAndMatchesFrom(t, day, newPresent, fmt,
+        generateDayTeamsAndMatchesFrom(t, day, newPresent, day.getMatchFormat(),
                 day.getNumberOfTeams(), day.getPlayersPerTeam(), completedCount + 1);
 
         postSystemMessage(t, newMember.getDisplayName() + " joined mid-day! Schedule regenerated.",
@@ -401,7 +389,6 @@ public class TournamentService {
     }
 
     // ── REMOVE PLAYER MID-DAY ─────────────────────────────────────────────────
-    // Removes a player from the current day and reschedules remaining matches
 
     @Transactional
     public TournamentDay removePlayerMidDay(Long tournamentId, Player admin, Long memberId) {
@@ -414,37 +401,27 @@ public class TournamentService {
         TournamentMember leavingMember = memberRepo.findById(memberId)
                 .orElseThrow(() -> new RuntimeException("Member not found"));
 
-        boolean isPresent = day.getPresentMembers().stream()
-                .anyMatch(m -> m.getId().equals(memberId));
+        boolean isPresent = day.getPresentMembers().stream().anyMatch(m -> m.getId().equals(memberId));
         if (!isPresent) throw new RuntimeException("Player is not in today's session");
 
         List<Match> allMatches = matchRepo.findByDayOrderByMatchNumberAsc(day);
         int completedCount = (int) allMatches.stream()
                 .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
 
-        // Nullify winner refs before deleting non-completed matches
         List<Match> toDelete = allMatches.stream()
                 .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
                 .collect(Collectors.toList());
-        for (Match match : toDelete) {
-            match.setWinner(null);
-            matchRepo.save(match);
-        }
+        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
         matchRepo.flush();
         matchRepo.deleteAll(toDelete);
         matchRepo.flush();
 
-        // Clear team member join tables before deleting teams
         List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) {
-            team.getMembers().clear();
-            teamRepo.save(team);
-        }
+        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
         teamRepo.flush();
         teamRepo.deleteAll(teams);
         teamRepo.flush();
 
-        // Remove from present list
         List<TournamentMember> newPresent = day.getPresentMembers().stream()
                 .filter(m -> !m.getId().equals(memberId))
                 .collect(Collectors.toList());
@@ -465,7 +442,7 @@ public class TournamentService {
         return day;
     }
 
-    // ── RESTART MATCHMAKING (preserves completed matches) ─────────────────────
+    // ── RESTART MATCHMAKING ───────────────────────────────────────────────────
 
     @Transactional
     public TournamentDay restartMatchmaking(Long tournamentId, Player admin, DTOs.StartDayRequest req) {
@@ -479,24 +456,16 @@ public class TournamentService {
         int completedCount = (int) allMatches.stream()
                 .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
 
-        // Nullify winner refs on non-completed matches before deleting
         List<Match> toDelete = allMatches.stream()
                 .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
                 .collect(Collectors.toList());
-        for (Match match : toDelete) {
-            match.setWinner(null);
-            matchRepo.save(match);
-        }
+        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
         matchRepo.flush();
         matchRepo.deleteAll(toDelete);
         matchRepo.flush();
 
-        // Clear team member join tables before deleting teams
         List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) {
-            team.getMembers().clear();
-            teamRepo.save(team);
-        }
+        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
         teamRepo.flush();
         teamRepo.deleteAll(teams);
         teamRepo.flush();
@@ -535,10 +504,6 @@ public class TournamentService {
             return;
         }
 
-        // TEAM_2V2: balanced pairs — 2 players per side on one table per match
-        // Matches are doubles: member1+partner1 vs member2+partner2
-        // We store them as individual member1/member2 rows but group by Team so the UI
-        // can show "Team A (Player X + Player Y) vs Team B (Player P + Player Q)"
         if (fmt == TournamentDay.MatchFormat.TEAM_2V2 || perTeam == 2) {
             generateBalanced2v2(t, day, present, startMatchNum);
             return;
@@ -570,22 +535,13 @@ public class TournamentService {
         if (!matches.isEmpty()) activateFirst(matches.get(0));
     }
 
-    /**
-     * BALANCED 2v2 GENERATION
-     * Balances players by rank+proficiency into pairs, then schedules all pairs against each other.
-     * E.g. 8 players → 4 pairs → 6 doubles matches (round-robin of pairs).
-     * Each match: Pair A vs Pair B — 2 players each side, same table.
-     * Uses the same fair-scheduling algorithm as FFA to minimize rest time.
-     */
     private void generateBalanced2v2(Tournament t, TournamentDay day, List<TournamentMember> present, int startMatchNum) {
         int n = present.size();
         if (n < 4) {
-            // Fall back to FFA if not enough for 2v2
             generateScheduledFreeForAll(t, day, present, startMatchNum);
             return;
         }
 
-        // Sort players by composite score (rank + proficiency) for snake draft into pairs
         Map<String,Integer> profLevel = Map.of(
                 "Beginner",0,"Intermediate",1,"Advanced",2,"Expert",3,"Professional",4);
         List<TournamentMember> sorted = new ArrayList<>(present);
@@ -597,27 +553,22 @@ public class TournamentService {
             return rank - prof * 3.0;
         }));
 
-        // Snake-draft into pairs of 2 (best+worst, 2nd+3rd, etc.)
-        // This ensures each pair has one stronger and one weaker player = balanced doubles
         int numPairs = n / 2;
         List<TournamentMember[]> pairs = new ArrayList<>();
         for (int i = 0; i < numPairs; i++) {
             TournamentMember stronger = sorted.get(i);
             TournamentMember weaker = sorted.get(n - 1 - i);
             if (stronger.getId().equals(weaker.getId())) {
-                // Odd player out — add to previous pair as a 3-player team or skip
-                if (i > 0) pairs.get(i - 1)[1] = weaker; // extend
+                if (i > 0) pairs.get(i - 1)[1] = weaker;
                 break;
             }
             pairs.add(new TournamentMember[]{stronger, weaker});
         }
-        // If odd number of players, last player forms a solo pair (plays both positions)
         if (n % 2 != 0 && sorted.size() > numPairs * 2) {
             TournamentMember solo = sorted.get(numPairs);
             pairs.add(new TournamentMember[]{solo, solo});
         }
 
-        // Create Team entities for each pair
         String[] teamNames = {"Team Alpha","Team Beta","Team Gamma","Team Delta",
                 "Team Epsilon","Team Zeta","Team Eta","Team Theta"};
         List<Team> teams = new ArrayList<>();
@@ -635,14 +586,12 @@ public class TournamentService {
             teams.add(teamRepo.save(team));
         }
 
-        // Schedule all pair matchups (round-robin of pairs) with fair wait-time algorithm
         int numT = teams.size();
         List<int[]> pairMatchups = new ArrayList<>();
         for (int i = 0; i < numT; i++)
             for (int j = i + 1; j < numT; j++)
                 pairMatchups.add(new int[]{i, j});
 
-        // Fair scheduling: prioritize pairs that waited longest
         List<int[]> scheduled = new ArrayList<>();
         boolean[] used = new boolean[pairMatchups.size()];
         int[] waitSince = new int[numT];
@@ -664,8 +613,6 @@ public class TournamentService {
             slot++;
         }
 
-        // Create match rows: one representative match per pair matchup
-        // Use first member of each pair as member1/member2 (team shows full pair in UI)
         List<Match> matches = new ArrayList<>();
         int matchNum = startMatchNum;
         for (int[] sch : scheduled) {
@@ -752,7 +699,8 @@ public class TournamentService {
     public Match submitResult(Long matchId, Player submitter, int score1, int score2) {
         Match m = matchRepo.findById(matchId).orElseThrow(() -> new RuntimeException("Match not found"));
         Tournament t = m.getTournament();
-        boolean isMember = memberRepo.existsByTournamentAndPlayer(t, submitter);
+        // Use ID-based check to avoid lazy loading issues
+        boolean isMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), submitter.getId());
         boolean isAdminPlayer = isAdmin(t, submitter);
         if (!isMember && !isAdminPlayer) throw new RuntimeException("Not a member of this tournament");
         if (m.getStatus() == Match.MatchStatus.COMPLETED) throw new RuntimeException("Match already completed");
@@ -766,7 +714,6 @@ public class TournamentService {
         m.setWinner(winner);
         int ws = team1wins ? score1 : score2, ls = team1wins ? score2 : score1;
 
-        // Determine all winning and losing members (handles 2v2 teams)
         List<TournamentMember> winningMembers = new ArrayList<>();
         List<TournamentMember> losingMembers = new ArrayList<>();
         boolean is2v2 = m.getTeam1() != null && m.getTeam2() != null
@@ -782,7 +729,6 @@ public class TournamentService {
             losingMembers.add(loser);
         }
 
-        // Update stats for all winning members
         for (TournamentMember wm : winningMembers) {
             wm.setTotalMatchesWon(wm.getTotalMatchesWon() + 1);
             wm.setTotalMatchesPlayed(wm.getTotalMatchesPlayed() + 1);
@@ -797,7 +743,6 @@ public class TournamentService {
             }
         }
 
-        // Update stats for all losing members
         for (TournamentMember lm : losingMembers) {
             lm.setTotalMatchesLost(lm.getTotalMatchesLost() + 1);
             lm.setTotalMatchesPlayed(lm.getTotalMatchesPlayed() + 1);
@@ -812,7 +757,6 @@ public class TournamentService {
             }
         }
 
-        // Update team win/loss counts
         if (m.getTeam1() != null) {
             Team wt = team1wins ? m.getTeam1() : m.getTeam2();
             Team lt = team1wins ? m.getTeam2() : m.getTeam1();
@@ -823,7 +767,6 @@ public class TournamentService {
 
         Match saved = matchRepo.save(m);
 
-        // Build display names: "A & B" for 2v2, single name for 1v1
         String side1Name = is2v2
                 ? m.getTeam1().getMembers().stream().map(TournamentMember::getDisplayName).collect(Collectors.joining(" & "))
                 : m.getMember1().getDisplayName();
@@ -890,29 +833,24 @@ public class TournamentService {
             if (s2 != null) { s2[1]++; if (!m1won) s2[0]++; s2[2] += m.getMember2Score(); s2[3] += m.getMember1Score(); }
         }
 
-        // AI-based re-ranking (wins/matches ratio + proficiency)
         List<TournamentMember> allMembers = memberRepo.findByTournamentOrderByCurrentRankAsc(t);
         Map<Long, Integer> oldRanks = new HashMap<>();
         allMembers.forEach(m -> oldRanks.put(m.getId(), m.getCurrentRank()));
         List<TournamentMember> reranked = rankingEngine.recomputeRanksWithProficiency(allMembers);
         reranked.forEach(memberRepo::save);
 
-        // Find MVP: player with most wins today (or most points if tied)
-        // Only consider players who actually played at least 1 match
         Long mvpId = stats.entrySet().stream()
-                .filter(e -> e.getValue()[1] > 0) // must have played at least 1 match
+                .filter(e -> e.getValue()[1] > 0)
                 .max(Comparator.comparingDouble(e -> {
                     int[] s = e.getValue();
                     return rankingEngine.computeDayScore(s[0], s[1], s[2], s[3]);
                 }))
                 .map(Map.Entry::getKey).orElse(null);
 
-        // If nobody played any match (all skipped), just pick first present member as MVP
         if (mvpId == null && !day.getPresentMembers().isEmpty()) {
             mvpId = day.getPresentMembers().get(0).getId();
         }
 
-        // Build result + save snapshots
         List<DTOs.DayRankEntry> entries = new ArrayList<>();
         for (TournamentMember mem : reranked) {
             int[] st = stats.getOrDefault(mem.getId(), new int[]{0, 0, 0, 0});
@@ -987,9 +925,8 @@ public class TournamentService {
                 .orElseThrow(() -> new RuntimeException("Member not found"));
         List<DailyRankingSnapshot> snapshots = snapshotRepo.findByMemberOrderByDayAsc(member);
 
-        // Compute best partner and rival from match history
         List<Match> allMatches = matchRepo.findByMember(memberId);
-        Map<Long, int[]> partnerStats = new HashMap<>(); // wins, games with partner
+        Map<Long, int[]> partnerStats = new HashMap<>();
         Map<Long, Integer> rivalGames = new HashMap<>();
 
         for (Match match : allMatches) {
@@ -999,10 +936,8 @@ public class TournamentService {
             TournamentMember opponent = isM1 ? match.getMember2() : match.getMember1();
             if (opponent == null) continue;
 
-            // Rival = opponent with most games
             rivalGames.merge(opponent.getId(), 1, Integer::sum);
 
-            // Partner = teammate with best wins-together if teams exist
             if (match.getTeam1() != null && match.getTeam2() != null) {
                 Team myTeam = isM1 ? match.getTeam1() : match.getTeam2();
                 boolean won = match.getWinner().getId().equals(memberId);
@@ -1057,7 +992,7 @@ public class TournamentService {
 
     public DTOs.ChatMessageResponse sendMessage(Long tournamentId, Player sender, String content) {
         Tournament t = getTournament(tournamentId);
-        if (!memberRepo.existsByTournamentAndPlayer(t, sender) && !isAdmin(t, sender))
+        if (!memberRepo.existsByTournamentIdAndPlayerId(t.getId(), sender.getId()) && !isAdmin(t, sender))
             throw new RuntimeException("Not a member of this tournament");
         ChatMessage msg = new ChatMessage();
         msg.setTournament(t); msg.setSender(sender);
@@ -1106,6 +1041,27 @@ public class TournamentService {
         return result;
     }
 
+    // ── FIX: getMyTournaments — avoid lazy loading Tournament.members ─────────
+    // Original code called t.getMembers().size() which triggered lazy load outside session
+    @Transactional(readOnly = true)
+    public List<DTOs.TournamentSummaryResponse> getMyTournaments(Player player) {
+        return tournamentRepo.findByMemberPlayer(player).stream().map(t -> {
+            List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
+            Optional<TournamentDay> lastDay = days.stream().reduce((a, b) -> b);
+            int daysPlayed = (int) days.stream().filter(d -> d.getStatus() == TournamentDay.DayStatus.ENDED).count();
+            // FIX: use count query instead of t.getMembers().size() to avoid LazyInitializationException
+            long memberCount = memberRepo.countByTournament(t);
+            DTOs.TournamentSummaryResponse s = new DTOs.TournamentSummaryResponse();
+            s.id = t.getId(); s.name = t.getName(); s.memberCount = (int) memberCount;
+            s.adminCount = t.getAdmins().size(); s.daysPlayed = daysPlayed;
+            s.isAdmin = isAdmin(t, player); s.isMember = true; s.createdAt = t.getCreatedAt();
+            s.lastDayStatus = lastDay.map(d -> d.getStatus().name()).orElse("NO_DAYS");
+            s.lastDayNumber = lastDay.map(TournamentDay::getDayNumber).orElse(0);
+            return s;
+        }).collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
     public DTOs.TournamentDetailResponse getTournamentDetail(Long tournamentId, Player requester) {
         Tournament t = getTournament(tournamentId);
         List<TournamentMember> members = memberRepo.findByTournamentOrderByCurrentRankAsc(t);
@@ -1124,21 +1080,6 @@ public class TournamentService {
         res.rankings = getRankings(tournamentId);
         res.createdAt = t.getCreatedAt(); res.isAdmin = isAdmin(t, requester);
         return res;
-    }
-
-    public List<DTOs.TournamentSummaryResponse> getMyTournaments(Player player) {
-        return tournamentRepo.findByMemberPlayer(player).stream().map(t -> {
-            List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
-            Optional<TournamentDay> lastDay = days.stream().reduce((a, b) -> b);
-            int daysPlayed = (int) days.stream().filter(d -> d.getStatus() == TournamentDay.DayStatus.ENDED).count();
-            DTOs.TournamentSummaryResponse s = new DTOs.TournamentSummaryResponse();
-            s.id = t.getId(); s.name = t.getName(); s.memberCount = t.getMembers().size();
-            s.adminCount = t.getAdmins().size(); s.daysPlayed = daysPlayed;
-            s.isAdmin = isAdmin(t, player); s.isMember = true; s.createdAt = t.getCreatedAt();
-            s.lastDayStatus = lastDay.map(d -> d.getStatus().name()).orElse("NO_DAYS");
-            s.lastDayNumber = lastDay.map(TournamentDay::getDayNumber).orElse(0);
-            return s;
-        }).collect(Collectors.toList());
     }
 
     // ── PRIVATE HELPERS ───────────────────────────────────────────────────────
@@ -1180,15 +1121,10 @@ public class TournamentService {
             elapsed = ChronoUnit.SECONDS.between(day.getStartedAt(), LocalDateTime.now());
         else if (day.getTimerSeconds() > 0) elapsed = day.getTimerSeconds();
 
-        // Find MVP from snapshots for this day
         String mvpName = null;
         Long mvpMemberId = null;
         if (day.getStatus() == TournamentDay.DayStatus.ENDED) {
             Tournament t = day.getTournament();
-            snapshotRepo.findByTournamentAndDayOrderByRankAsc(t, day).stream()
-                    .filter(DailyRankingSnapshot::isMvp)
-                    .findFirst()
-                    .ifPresent(s -> {/* set below */});
             var mvpSnap = snapshotRepo.findByTournamentAndDayOrderByRankAsc(t, day).stream()
                     .filter(DailyRankingSnapshot::isMvp).findFirst().orElse(null);
             if (mvpSnap != null) {
@@ -1225,7 +1161,6 @@ public class TournamentService {
         r.team1Name = m.getTeam1() != null ? m.getTeam1().getName() : null;
         r.team2Name = m.getTeam2() != null ? m.getTeam2().getName() : null;
 
-        // For 2v2: build "Player A & Player B" style names and member lists
         boolean is2v2 = m.getTeam1() != null && m.getTeam2() != null
                 && m.getTeam1().getMembers() != null && m.getTeam1().getMembers().size() > 1;
         if (is2v2) {

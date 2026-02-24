@@ -102,7 +102,6 @@ public class PlayerService {
         playerRepo.save(player);
     }
 
-    // FIX: was calling 5-arg constructor — now calls 6-arg with proficiency
     public DTOs.AuthResponse toAuthResponse(Player p, String token) {
         return new DTOs.AuthResponse(token, p.getUsername(), p.getDisplayName(),
                 p.getEmail(), p.getId(), p.getProficiency());
