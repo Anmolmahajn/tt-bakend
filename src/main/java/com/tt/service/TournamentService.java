@@ -877,6 +877,18 @@ public class TournamentService {
                     : (mem.getPlayer() != null ? mem.getPlayer().getProficiency() : null);
             entries.add(e);
         }
+        // Post DAY_ENDED and MVP system messages to chat
+        String mvpDisplayName = entries.stream()
+                .filter(e -> e.isMvp).findFirst()
+                .map(e -> e.displayName).orElse(null);
+        String dayEndMsg = "Day " + day.getDayNumber() + " ended! "
+                + day.getPresentMembers().size() + " players · "
+                + entries.stream().mapToInt(e -> e.matchesPlayed).sum() / 2 + " matches played.";
+        postSystemMessage(t, dayEndMsg, ChatMessage.MessageType.DAY_ENDED);
+        if (mvpDisplayName != null) {
+            postSystemMessage(t, "🏆 MVP: " + mvpDisplayName + " — Best performance of the day!",
+                    ChatMessage.MessageType.SYSTEM);
+        }
         broadcastTournament(tournamentId);
         broadcastChat(tournamentId);
         return entries;
@@ -1082,19 +1094,39 @@ public class TournamentService {
         return res;
     }
 
+    // ── TODAY (lightweight poll endpoint) ───────────────────────────────────────
+    // Returns only current day + matches. Used by frontend polling every 8s.
+    // Much faster than full getTournamentDetail which loads all history.
+    @Transactional(readOnly = true)
+    public DTOs.TodayResponse getTodayData(Long tournamentId, Player requester) {
+        Tournament t = getTournament(tournamentId);
+        DTOs.TodayResponse res = new DTOs.TodayResponse();
+        res.isAdmin = isAdmin(t, requester);
+        res.serverTime = System.currentTimeMillis();
+        res.currentDay = dayRepo
+                .findFirstByTournamentAndStatusOrderByDayNumberDesc(t, TournamentDay.DayStatus.IN_PROGRESS)
+                .map(d -> toDayResponse(d, true))
+                .orElse(null);
+        return res;
+    }
+
     // ── PRIVATE HELPERS ───────────────────────────────────────────────────────
 
     private void postSystemMessage(Tournament t, String content, ChatMessage.MessageType type) {
         ChatMessage msg = new ChatMessage();
-        msg.setTournament(t); msg.setSender(t.getCreatedBy());
+        msg.setTournament(t);
+        // Use createdBy as sender — it's fine if null, toChatResponse handles null safely
+        msg.setSender(t.getCreatedBy());
         msg.setContent(content); msg.setType(type);
         chatRepo.save(msg);
     }
 
     private DTOs.ChatMessageResponse toChatResponse(ChatMessage m) {
         DTOs.ChatMessageResponse r = new DTOs.ChatMessageResponse();
-        r.id = m.getId(); r.senderId = m.getSender().getId();
-        r.senderName = m.getSender().getDisplayName();
+        r.id = m.getId();
+        // Null-safe: system messages may have null sender if createdBy is not set
+        r.senderId = m.getSender() != null ? m.getSender().getId() : 0L;
+        r.senderName = m.getSender() != null ? m.getSender().getDisplayName() : "System";
         r.content = m.getContent(); r.type = m.getType().name(); r.sentAt = m.getSentAt();
         return r;
     }

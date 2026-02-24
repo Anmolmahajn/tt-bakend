@@ -29,6 +29,13 @@ public class MainController {
 
     private Player me(UserDetails ud) { return authService.getPlayer(ud.getUsername()); }
 
+    // ── HEALTH ────────────────────────────────────────────────────────────────
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String,String>> health() {
+        return ResponseEntity.ok(Map.of("status","ok","time",String.valueOf(System.currentTimeMillis())));
+    }
+
     // ── AUTH ──────────────────────────────────────────────────────────────────
 
     @PostMapping("/auth/register")
@@ -83,7 +90,6 @@ public class MainController {
         return ResponseEntity.ok().build();
     }
 
-    // Rename tournament (creator only)
     @PutMapping("/tournaments/{id}/name")
     public ResponseEntity<Void> renameTournament(
             @PathVariable Long id, @RequestBody Map<String, String> body,
@@ -92,7 +98,6 @@ public class MainController {
         return ResponseEntity.ok().build();
     }
 
-    // Change tournament password (creator only)
     @PutMapping("/tournaments/{id}/password")
     public ResponseEntity<Void> changeTournamentPassword(
             @PathVariable Long id, @RequestBody Map<String, String> body,
@@ -101,7 +106,6 @@ public class MainController {
         return ResponseEntity.ok().build();
     }
 
-    // Add guest with optional proficiency
     @PostMapping("/tournaments/{id}/guests")
     public ResponseEntity<DTOs.MemberResponse> addGuest(
             @PathVariable Long id, @RequestBody DTOs.AddGuestRequest req,
@@ -113,7 +117,6 @@ public class MainController {
         return ResponseEntity.ok(r);
     }
 
-    // Remove member — service clears join tables + nullifies FKs first
     @DeleteMapping("/tournaments/{id}/members/{memberId}")
     public ResponseEntity<Void> removeMember(
             @PathVariable Long id, @PathVariable Long memberId,
@@ -122,7 +125,6 @@ public class MainController {
         return ResponseEntity.ok().build();
     }
 
-    // Update proficiency for any member (guests too)
     @PutMapping("/tournaments/{id}/members/{memberId}/proficiency")
     public ResponseEntity<Void> updateMemberProficiency(
             @PathVariable Long id, @PathVariable Long memberId,
@@ -182,7 +184,6 @@ public class MainController {
         return ResponseEntity.ok(tournamentService.getTournamentDetail(id, p));
     }
 
-    // ADD PLAYER MID-DAY — new endpoint
     @PostMapping("/tournaments/{id}/days/add-player/{memberId}")
     public ResponseEntity<DTOs.TournamentDetailResponse> addPlayerMidDay(
             @PathVariable Long id, @PathVariable Long memberId,
@@ -192,7 +193,6 @@ public class MainController {
         return ResponseEntity.ok(tournamentService.getTournamentDetail(id, p));
     }
 
-    // REMOVE PLAYER MID-DAY — player left early, reschedule matches
     @PostMapping("/tournaments/{id}/days/remove-player/{memberId}")
     public ResponseEntity<DTOs.TournamentDetailResponse> removePlayerMidDay(
             @PathVariable Long id, @PathVariable Long memberId,
@@ -200,6 +200,13 @@ public class MainController {
         Player p = me(ud);
         tournamentService.removePlayerMidDay(id, p, memberId);
         return ResponseEntity.ok(tournamentService.getTournamentDetail(id, p));
+    }
+
+    // Lightweight poll endpoint — only current day + matches, no full history load
+    @GetMapping("/tournaments/{id}/today")
+    public ResponseEntity<DTOs.TodayResponse> getTodayData(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.getTodayData(id, me(ud)));
     }
 
     @GetMapping("/tournaments/{id}/rankings")

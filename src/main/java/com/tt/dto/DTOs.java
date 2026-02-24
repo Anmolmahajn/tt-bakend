@@ -34,7 +34,6 @@ public class DTOs {
         public String getPassword() { return password; } public void setPassword(String v) { password=v; }
     }
 
-    // FIX: added proficiency field for guests
     public static class AddGuestRequest {
         private String guestName, proficiency;
         public String getGuestName() { return guestName; } public void setGuestName(String v) { guestName=v; }
@@ -121,6 +120,14 @@ public class DTOs {
         public List<RankingResponse> rankings; public LocalDateTime createdAt; public boolean isAdmin;
     }
 
+    // ── NEW: Lightweight response for Today tab polling ───────────────────────
+    // Only returns current day + matches — much faster than full TournamentDetailResponse
+    public static class TodayResponse {
+        public DayResponse currentDay;   // null if no active day
+        public boolean isAdmin;
+        public long serverTime;          // ms since epoch
+    }
+
     public static class MemberResponse {
         public Long id, playerId; public String displayName, proficiency;
         public boolean isGuest; public int currentRank, totalMatchesPlayed,
@@ -135,7 +142,7 @@ public class DTOs {
         public List<TeamResponse> teams; public List<MatchResponse> matches;
         public LocalDateTime startedAt, endedAt;
         public long timerSeconds, elapsedSeconds;
-        public String mvpName; public Long mvpMemberId; // MVP for ended days
+        public String mvpName; public Long mvpMemberId;
     }
 
     public static class TeamResponse {
@@ -146,7 +153,6 @@ public class DTOs {
     public static class MatchResponse {
         public Long id; public int matchNumber; public Long member1Id, member2Id;
         public String member1Name, member2Name, team1Name, team2Name;
-        // 2v2: full list of names for each side e.g. ["Alice","Bob"] vs ["Charlie","Dave"]
         public List<String> team1Members, team2Members;
         public int member1Score, member2Score; public Long winnerId; public String winnerName;
         public String status; public double member1WinProb, member2WinProb;

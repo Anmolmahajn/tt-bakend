@@ -10,7 +10,7 @@ public class ChatMessage {
     private Long id;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "tournament_id", nullable = false)
     private Tournament tournament;
-    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "sender_id", nullable = false)
+    @ManyToOne(fetch = FetchType.EAGER) @JoinColumn(name = "sender_id", nullable = false)
     private Player sender;
     @Column(nullable = false, length = 1000) private String content;
     @Enumerated(EnumType.STRING) private MessageType type = MessageType.TEXT;
