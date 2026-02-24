@@ -12,12 +12,12 @@ public class Tournament {
     private Long id;
     @Column(nullable = false, unique = true) private String name;
     @Column(nullable = false) private String passwordHash;
-    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "created_by_id")
+    @ManyToOne(fetch = FetchType.EAGER) @JoinColumn(name = "created_by_id")
     private Player createdBy;
-    @ManyToMany
+    @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(name = "tournament_admins",
-        joinColumns = @JoinColumn(name = "tournament_id"),
-        inverseJoinColumns = @JoinColumn(name = "player_id"))
+            joinColumns = @JoinColumn(name = "tournament_id"),
+            inverseJoinColumns = @JoinColumn(name = "player_id"))
     private List<Player> admins = new ArrayList<>();
     @OneToMany(mappedBy = "tournament", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<TournamentMember> members = new ArrayList<>();

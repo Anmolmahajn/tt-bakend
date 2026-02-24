@@ -10,7 +10,7 @@ public class TournamentMember {
     private Long id;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "tournament_id", nullable = false)
     private Tournament tournament;
-    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "player_id")
+    @ManyToOne(fetch = FetchType.EAGER) @JoinColumn(name = "player_id")
     private Player player;
     private String guestName;
     private boolean isGuest = false;
@@ -22,7 +22,9 @@ public class TournamentMember {
     private int totalPointsConceded = 0;
     private int daysPlayed = 0;
     private LocalDateTime joinedAt = LocalDateTime.now();
+    // NEW: proficiency for guest players (registered players use Player.proficiency)
     private String guestProficiency = "Intermediate";
+    // NEW: total MVP awards won across all days
     private int mvpCount = 0;
 
     public TournamentMember() {}
