@@ -66,9 +66,10 @@ public class DTOs {
     }
 
     public static class UpdateProfileRequest {
-        private String displayName, avatarUrl;
+        private String displayName, avatarUrl, proficiency;
         public String getDisplayName() { return displayName; } public void setDisplayName(String v) { displayName=v; }
         public String getAvatarUrl() { return avatarUrl; } public void setAvatarUrl(String v) { avatarUrl=v; }
+        public String getProficiency() { return proficiency; } public void setProficiency(String v) { proficiency=v; }
     }
 
     public static class UpdateFcmTokenRequest {

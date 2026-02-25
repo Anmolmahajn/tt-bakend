@@ -896,6 +896,7 @@ public class TournamentService {
 
     // ── HEAD-TO-HEAD ──────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public DTOs.HeadToHeadResponse getHeadToHead(Long tournamentId, Long member1Id, Long member2Id) {
         TournamentMember m1 = memberRepo.findById(member1Id)
                 .orElseThrow(() -> new RuntimeException("Member not found"));
@@ -932,6 +933,7 @@ public class TournamentService {
 
     // ── MEMBER STATS ──────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public DTOs.MemberStatsResponse getMemberStats(Long tournamentId, Long memberId) {
         TournamentMember member = memberRepo.findById(memberId)
                 .orElseThrow(() -> new RuntimeException("Member not found"));

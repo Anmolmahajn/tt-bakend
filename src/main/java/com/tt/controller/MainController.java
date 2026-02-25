@@ -284,6 +284,14 @@ public class MainController {
         return ResponseEntity.ok(playerService.updateProfile(me(ud), req));
     }
 
+    @PostMapping("/players/me/password")
+    public ResponseEntity<Void> changePassword(
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal UserDetails ud) {
+        playerService.changePassword(me(ud), body.get("currentPassword"), body.get("newPassword"));
+        return ResponseEntity.ok().build();
+    }
+
     @PutMapping("/players/me/fcm-token")
     public ResponseEntity<Void> updateFcmToken(
             @RequestBody DTOs.UpdateFcmTokenRequest req,

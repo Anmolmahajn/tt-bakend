@@ -6,6 +6,7 @@ import com.tt.model.TournamentMember;
 import com.tt.repository.PlayerRepository;
 import com.tt.repository.TournamentMemberRepository;
 import com.tt.repository.TournamentRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
@@ -17,12 +18,14 @@ public class PlayerService {
     private final PlayerRepository playerRepo;
     private final TournamentMemberRepository memberRepo;
     private final TournamentRepository tournamentRepo;
+    private final PasswordEncoder passwordEncoder;
 
     public PlayerService(PlayerRepository playerRepo, TournamentMemberRepository memberRepo,
-                         TournamentRepository tournamentRepo) {
+                         TournamentRepository tournamentRepo, PasswordEncoder passwordEncoder) {
         this.playerRepo = playerRepo;
         this.memberRepo = memberRepo;
         this.tournamentRepo = tournamentRepo;
+        this.passwordEncoder = passwordEncoder;
     }
 
     public DTOs.PlayerProfileResponse getProfile(Long playerId, Player requester) {
@@ -92,8 +95,20 @@ public class PlayerService {
             player.setDisplayName(req.getDisplayName().trim());
         if (req.getAvatarUrl() != null)
             player.setAvatarUrl(req.getAvatarUrl().trim());
+        if (req.getProficiency() != null && !req.getProficiency().isBlank())
+            player.setProficiency(req.getProficiency());
         playerRepo.save(player);
         return getProfile(player.getId(), player);
+    }
+
+    @Transactional
+    public void changePassword(Player player, String currentPassword, String newPassword) {
+        if (!passwordEncoder.matches(currentPassword, player.getPasswordHash()))
+            throw new RuntimeException("Current password is incorrect");
+        if (newPassword == null || newPassword.length() < 6)
+            throw new RuntimeException("New password must be at least 6 characters");
+        player.setPasswordHash(passwordEncoder.encode(newPassword));
+        playerRepo.save(player);
     }
 
     @Transactional
@@ -102,6 +117,7 @@ public class PlayerService {
         playerRepo.save(player);
     }
 
+    // FIX: was calling 5-arg constructor — now calls 6-arg with proficiency
     public DTOs.AuthResponse toAuthResponse(Player p, String token) {
         return new DTOs.AuthResponse(token, p.getUsername(), p.getDisplayName(),
                 p.getEmail(), p.getId(), p.getProficiency());
