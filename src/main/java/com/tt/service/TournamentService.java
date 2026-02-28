@@ -693,6 +693,85 @@ public class TournamentService {
         return (lvl.getOrDefault(p1, 1) - lvl.getOrDefault(p2, 1)) / 4.0;
     }
 
+    // ── CHALLENGE MATCH ───────────────────────────────────────────────────────
+    // Creates a match between two members regardless of whether a day is active.
+    // If a day is IN_PROGRESS the match is appended to it.
+    // Otherwise a persistent "Challenge" day (dayNumber = -1) is used as a bucket.
+
+    @Transactional
+    public DTOs.MatchResponse createChallengeMatch(Long tournamentId, Player requester,
+                                                   Long member1Id, Long member2Id) {
+        Tournament t = getTournament(tournamentId);
+        boolean isMember = memberRepo.existsByTournamentIdAndPlayerId(tournamentId, requester.getId());
+        if (!isMember && !isAdmin(t, requester))
+            throw new RuntimeException("Not a member of this tournament");
+
+        TournamentMember m1 = memberRepo.findById(member1Id)
+                .orElseThrow(() -> new RuntimeException("Member not found: " + member1Id));
+        TournamentMember m2 = memberRepo.findById(member2Id)
+                .orElseThrow(() -> new RuntimeException("Member not found: " + member2Id));
+        if (!m1.getTournament().getId().equals(tournamentId) || !m2.getTournament().getId().equals(tournamentId))
+            throw new RuntimeException("Members must be in this tournament");
+
+        // Use the active day if one exists; otherwise use/create the challenge-bucket day (dayNumber = -1)
+        TournamentDay day = dayRepo
+                .findFirstByTournamentAndStatusOrderByDayNumberDesc(t, TournamentDay.DayStatus.IN_PROGRESS)
+                .orElseGet(() -> getOrCreateChallengeBucketDay(t));
+
+        // Append after the last existing match in this day
+        List<Match> existing = matchRepo.findByDayOrderByMatchNumberAsc(day);
+        int nextNum = existing.stream().mapToInt(Match::getMatchNumber).max().orElse(0) + 1;
+        int totalPlayers = day.getPresentMembers().isEmpty()
+                ? (int) memberRepo.countByTournament(t) : day.getPresentMembers().size();
+
+        Match match = buildMatch(t, day, m1, m2, null, null, nextNum, totalPlayers);
+        match.setStatus(Match.MatchStatus.IN_PROGRESS);
+        match.setStartedAt(LocalDateTime.now());
+        match = matchRepo.save(match);
+
+        // Add both players to day's present list if not already there (challenge bucket only)
+        if (day.getDayNumber() == -1) {
+            List<TournamentMember> present = new ArrayList<>(day.getPresentMembers());
+            if (present.stream().noneMatch(p -> p.getId().equals(member1Id))) present.add(m1);
+            if (present.stream().noneMatch(p -> p.getId().equals(member2Id))) present.add(m2);
+            day.setPresentMembers(present);
+            dayRepo.save(day);
+        }
+
+        postSystemMessage(t,
+                "⚔️ Challenge Match: " + m1.getDisplayName() + " vs " + m2.getDisplayName() + " — Challenge accepted!",
+                ChatMessage.MessageType.SYSTEM);
+        try { pushService.notifyMatchResult(t,
+                "⚔️ " + m1.getDisplayName() + " vs " + m2.getDisplayName() + " — challenge match is ON!"); }
+        catch (Exception ignored) {}
+        broadcastTournament(tournamentId);
+        broadcastChat(tournamentId);
+
+        DTOs.MatchResponse mr = new DTOs.MatchResponse();
+        mr.id = match.getId(); mr.matchNumber = match.getMatchNumber();
+        mr.member1Id = m1.getId(); mr.member2Id = m2.getId();
+        mr.member1Name = m1.getDisplayName(); mr.member2Name = m2.getDisplayName();
+        mr.status = match.getStatus().name();
+        mr.member1WinProb = match.getMember1WinProb();
+        mr.member2WinProb = match.getMember2WinProb();
+        return mr;
+    }
+
+    /** Returns existing challenge-bucket day or creates one (dayNumber = -1, always IN_PROGRESS). */
+    private TournamentDay getOrCreateChallengeBucketDay(Tournament t) {
+        return dayRepo.findFirstByTournamentAndDayNumberOrderByIdDesc(t, -1)
+                .orElseGet(() -> {
+                    TournamentDay d = new TournamentDay();
+                    d.setTournament(t);
+                    d.setDayNumber(-1);
+                    d.setStatus(TournamentDay.DayStatus.IN_PROGRESS);
+                    d.setMatchFormat(TournamentDay.MatchFormat.FREE_FOR_ALL);
+                    d.setStartedAt(LocalDateTime.now());
+                    d.setPresentMembers(new ArrayList<>());
+                    return dayRepo.save(d);
+                });
+    }
+
     // ── SUBMIT RESULT ─────────────────────────────────────────────────────────
 
     @Transactional
@@ -1060,10 +1139,11 @@ public class TournamentService {
     @Transactional(readOnly = true)
     public List<DTOs.TournamentSummaryResponse> getMyTournaments(Player player) {
         return tournamentRepo.findByMemberPlayer(player).stream().map(t -> {
-            List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
+            // Exclude challenge-bucket day (dayNumber = -1) from all calculations
+            List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
+                    .filter(d -> d.getDayNumber() >= 0).collect(Collectors.toList());
             Optional<TournamentDay> lastDay = days.stream().reduce((a, b) -> b);
             int daysPlayed = (int) days.stream().filter(d -> d.getStatus() == TournamentDay.DayStatus.ENDED).count();
-            // FIX: use count query instead of t.getMembers().size() to avoid LazyInitializationException
             long memberCount = memberRepo.countByTournament(t);
             DTOs.TournamentSummaryResponse s = new DTOs.TournamentSummaryResponse();
             s.id = t.getId(); s.name = t.getName(); s.memberCount = (int) memberCount;
@@ -1079,7 +1159,9 @@ public class TournamentService {
     public DTOs.TournamentDetailResponse getTournamentDetail(Long tournamentId, Player requester) {
         Tournament t = getTournament(tournamentId);
         List<TournamentMember> members = memberRepo.findByTournamentOrderByCurrentRankAsc(t);
-        List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t);
+        // Exclude challenge-bucket day (dayNumber = -1) from history list
+        List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
+                .filter(d -> d.getDayNumber() >= 0).collect(Collectors.toList());
         DTOs.TournamentDetailResponse res = new DTOs.TournamentDetailResponse();
         res.id = t.getId(); res.name = t.getName(); res.memberCount = members.size();
         res.members = members.stream().map(this::toMemberResponse).collect(Collectors.toList());
@@ -1088,8 +1170,10 @@ public class TournamentService {
             ar.playerId = a.getId(); ar.displayName = a.getDisplayName(); return ar;
         }).collect(Collectors.toList());
         res.days = days.stream().map(d -> toDayResponse(d, false)).collect(Collectors.toList());
-        res.currentDay = dayRepo.findFirstByTournamentAndStatusOrderByDayNumberDesc(
-                        t, TournamentDay.DayStatus.IN_PROGRESS)
+        // currentDay: prefer a real IN_PROGRESS day (dayNumber >= 0) over the challenge bucket
+        res.currentDay = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
+                .filter(d -> d.getDayNumber() >= 0 && d.getStatus() == TournamentDay.DayStatus.IN_PROGRESS)
+                .reduce((a, b) -> b) // last one
                 .map(d -> toDayResponse(d, true)).orElse(null);
         res.rankings = getRankings(tournamentId);
         res.createdAt = t.getCreatedAt(); res.isAdmin = isAdmin(t, requester);
@@ -1105,8 +1189,10 @@ public class TournamentService {
         DTOs.TodayResponse res = new DTOs.TodayResponse();
         res.isAdmin = isAdmin(t, requester);
         res.serverTime = System.currentTimeMillis();
-        res.currentDay = dayRepo
-                .findFirstByTournamentAndStatusOrderByDayNumberDesc(t, TournamentDay.DayStatus.IN_PROGRESS)
+        // Only return real days (not the challenge bucket) as the current day
+        res.currentDay = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
+                .filter(d -> d.getDayNumber() >= 0 && d.getStatus() == TournamentDay.DayStatus.IN_PROGRESS)
+                .reduce((a, b) -> b)
                 .map(d -> toDayResponse(d, true))
                 .orElse(null);
         return res;

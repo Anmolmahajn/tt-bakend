@@ -202,6 +202,14 @@ public class MainController {
         return ResponseEntity.ok(tournamentService.getTournamentDetail(id, p));
     }
 
+    @PostMapping("/tournaments/{id}/days/challenge-match")
+    public ResponseEntity<DTOs.MatchResponse> createChallengeMatch(
+            @PathVariable Long id, @RequestBody Map<String, Long> body,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.createChallengeMatch(
+                id, me(ud), body.get("member1Id"), body.get("member2Id")));
+    }
+
     // Lightweight poll endpoint — only current day + matches, no full history load
     @GetMapping("/tournaments/{id}/today")
     public ResponseEntity<DTOs.TodayResponse> getTodayData(
