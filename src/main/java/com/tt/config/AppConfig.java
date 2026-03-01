@@ -2,6 +2,7 @@ package com.tt.config;
 
 import com.tt.security.JwtAuthFilter;
 import com.tt.security.OAuth2SuccessHandler;
+import com.tt.security.ForceAccountSelectResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,6 +14,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -31,6 +33,7 @@ public class AppConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
+    private final ClientRegistrationRepository clientRegistrationRepository;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -52,6 +55,16 @@ public class AppConfig {
                 .oauth2Login(oauth2 -> oauth2
                         .successHandler(oAuth2SuccessHandler)
                         .failureUrl("/api/auth/oauth2-error")
+                        .authorizationEndpoint(endpoint -> endpoint
+                                .authorizationRequestResolver(
+                                        new ForceAccountSelectResolver(
+                                                new org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver(
+                                                        clientRegistrationRepository,
+                                                        "/oauth2/authorization"
+                                                )
+                                        )
+                                )
+                        )
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         http.headers(h -> h.frameOptions(f -> f.disable()));
