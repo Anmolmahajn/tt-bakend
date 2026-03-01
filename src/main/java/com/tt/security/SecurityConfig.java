@@ -17,11 +17,11 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableWebSecurity
 public class SecurityConfig {
 
-    private final JwtFilter jwtFilter;
+    private final JwtAuthFilter jwtAuthFilter;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
 
-    public SecurityConfig(JwtFilter jwtFilter, OAuth2SuccessHandler oAuth2SuccessHandler) {
-        this.jwtFilter = jwtFilter;
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, OAuth2SuccessHandler oAuth2SuccessHandler) {
+        this.jwtAuthFilter = jwtAuthFilter;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
     }
 
@@ -31,27 +31,22 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints — no token needed
                         .requestMatchers(
-                                "/api/auth/**",          // login, register, forgot-password, verify-otp, reset-password
-                                "/login/oauth2/**",       // OAuth2 redirect callbacks
-                                "/oauth2/**",             // OAuth2 authorization
+                                "/api/auth/**",
+                                "/login/oauth2/**",
+                                "/oauth2/**",
                                 "/api/health",
                                 "/h2-console/**",
-                                "/ws/**"                  // WebSocket handshake
+                                "/ws/**"
                         ).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                // OAuth2 social login
                 .oauth2Login(oauth2 -> oauth2
                         .successHandler(oAuth2SuccessHandler)
-                        // On failure redirect back to app with error param
                         .failureUrl("/api/auth/oauth2-error")
                 )
-                // JWT filter for all other requests
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
-                // Allow H2 console frames in dev
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .headers(h -> h.frameOptions(f -> f.disable()));
 
         return http.build();
