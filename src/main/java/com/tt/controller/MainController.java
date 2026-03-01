@@ -372,7 +372,15 @@ public class MainController {
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Map<String, String>> handleError(RuntimeException e) {
-        return ResponseEntity.badRequest().body(
-                Map.of("message", e.getMessage() != null ? e.getMessage() : "Error"));
+        String msg = e.getMessage() != null ? e.getMessage() : "An error occurred";
+        return ResponseEntity.badRequest().body(Map.of("message", msg));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, String>> handleGenericError(Exception e) {
+        String msg = e.getMessage() != null ? e.getMessage() : "Server error";
+        // Log it but don't expose internal stack traces
+        System.err.println("[ERROR] " + e.getClass().getSimpleName() + ": " + msg);
+        return ResponseEntity.internalServerError().body(Map.of("message", msg));
     }
 }
