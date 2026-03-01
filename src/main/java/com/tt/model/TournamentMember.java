@@ -26,17 +26,22 @@ public class TournamentMember {
     private String guestProficiency = "Intermediate";
     // NEW: total MVP awards won across all days
     private int mvpCount = 0;
+
+    // Elo rating (1200 default, updated on every match result, floor 800)
     private int eloRating = 1200;
+
+    // Current consecutive match win streak (resets on loss)
     private int currentWinStreak = 0;
+
+    // Best-ever win streak
     private int bestWinStreak = 0;
+
+    // Consecutive sessions attended
     private int sessionStreak = 0;
+
+    // JSON notification preferences
     @Column(length = 512)
     private String notifPrefs = "{\"MATCH_RESULT\":true,\"CHALLENGE\":true,\"DAY_START\":true,\"MILESTONE\":true}";
-
-
-
-
-
 
     public TournamentMember() {}
     public Long getId() { return id; }
@@ -69,24 +74,20 @@ public class TournamentMember {
     public void setGuestProficiency(String v) { this.guestProficiency = v; }
     public int getMvpCount() { return mvpCount; }
     public void setMvpCount(int v) { this.mvpCount = v; }
+    public int getEloRating() { return eloRating; }
+    public void setEloRating(int v) { this.eloRating = v; }
+    public int getCurrentWinStreak() { return currentWinStreak; }
+    public void setCurrentWinStreak(int v) { this.currentWinStreak = v; }
+    public int getBestWinStreak() { return bestWinStreak; }
+    public void setBestWinStreak(int v) { this.bestWinStreak = v; }
+    public int getSessionStreak() { return sessionStreak; }
+    public void setSessionStreak(int v) { this.sessionStreak = v; }
+    public String getNotifPrefs() { return notifPrefs; }
+    public void setNotifPrefs(String v) { this.notifPrefs = v; }
     public String getDisplayName() {
         return isGuest ? guestName : (player != null ? player.getDisplayName() : "Unknown");
     }
     public double getWinRate() {
         return totalMatchesPlayed == 0 ? 0.0 : (double) totalMatchesWon / totalMatchesPlayed * 100;
     }
-    public int getEloRating() { return eloRating; }
-    public void setEloRating(int v) { this.eloRating = v; }
-
-    public int getCurrentWinStreak() { return currentWinStreak; }
-    public void setCurrentWinStreak(int v) { this.currentWinStreak = v; }
-
-    public int getBestWinStreak() { return bestWinStreak; }
-    public void setBestWinStreak(int v) { this.bestWinStreak = v; }
-
-    public int getSessionStreak() { return sessionStreak; }
-    public void setSessionStreak(int v) { this.sessionStreak = v; }
-
-    public String getNotifPrefs() { return notifPrefs; }
-    public void setNotifPrefs(String v) { this.notifPrefs = v; }
 }
