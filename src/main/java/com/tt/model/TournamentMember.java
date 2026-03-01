@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 public class TournamentMember {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "tournament_id", nullable = false)
+    @ManyToOne(fetch = FetchType.EAGER) @JoinColumn(name = "tournament_id", nullable = false)
     private Tournament tournament;
     @ManyToOne(fetch = FetchType.EAGER) @JoinColumn(name = "player_id")
     private Player player;

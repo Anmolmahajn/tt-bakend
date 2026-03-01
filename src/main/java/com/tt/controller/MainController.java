@@ -48,6 +48,39 @@ public class MainController {
         return ResponseEntity.ok(authService.login(req));
     }
 
+    // ── FORGOT PASSWORD ───────────────────────────────────────────────────────
+    // Step 1: send OTP to email
+    @PostMapping("/auth/forgot-password")
+    public ResponseEntity<Map<String,String>> forgotPassword(@RequestBody Map<String,String> body) {
+        authService.sendForgotPasswordOtp(body.getOrDefault("email",""));
+        // Always return success to prevent email enumeration
+        return ResponseEntity.ok(Map.of("message","If that email exists, an OTP has been sent."));
+    }
+
+    // Step 2: verify OTP
+    @PostMapping("/auth/verify-otp")
+    public ResponseEntity<Map<String,String>> verifyOtp(@RequestBody Map<String,String> body) {
+        boolean ok = authService.verifyForgotPasswordOtp(
+                body.getOrDefault("email",""), body.getOrDefault("otp",""));
+        if (!ok) throw new RuntimeException("Invalid or expired OTP. Please try again.");
+        return ResponseEntity.ok(Map.of("verified","true"));
+    }
+
+    // Step 3: set new password
+    @PostMapping("/auth/reset-password")
+    public ResponseEntity<DTOs.AuthResponse> resetPassword(@RequestBody Map<String,String> body) {
+        return ResponseEntity.ok(authService.resetPassword(
+                body.getOrDefault("email",""),
+                body.getOrDefault("otp",""),
+                body.getOrDefault("newPassword","")));
+    }
+
+    // OAuth2 error fallback (redirected here on social login failure)
+    @GetMapping("/auth/oauth2-error")
+    public ResponseEntity<Map<String,String>> oauth2Error() {
+        return ResponseEntity.badRequest().body(Map.of("message","Social login failed. Please try again or use email login."));
+    }
+
     // ── TOURNAMENTS ───────────────────────────────────────────────────────────
 
     @GetMapping("/tournaments")
@@ -73,8 +106,8 @@ public class MainController {
             @RequestBody DTOs.JoinTournamentRequest req,
             @AuthenticationPrincipal UserDetails ud) {
         Player p = me(ud);
-        TournamentMember m = tournamentService.joinTournament(p, req.getTournamentName(), req.getPassword());
-        return ResponseEntity.ok(tournamentService.getTournamentDetail(m.getTournament().getId(), p));
+        Long tournamentId = tournamentService.joinTournamentGetId(p, req.getTournamentName(), req.getPassword());
+        return ResponseEntity.ok(tournamentService.getTournamentDetail(tournamentId, p));
     }
 
     @GetMapping("/tournaments/{id}")

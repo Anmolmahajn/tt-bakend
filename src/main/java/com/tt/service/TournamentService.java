@@ -66,19 +66,16 @@ public class TournamentService {
     }
 
     @Transactional
-    public TournamentMember joinTournament(Player player, String name, String password) {
-        // Case-insensitive name lookup so "2027 spinner" finds "2027 Spinner"
+    public Long joinTournamentGetId(Player player, String name, String password) {
         Tournament t = tournamentRepo.findByNameIgnoreCase(name.trim())
                 .orElseThrow(() -> new RuntimeException("Tournament not found"));
 
-        // Password check — allow blank password tournaments
         String hash = t.getPassword();
         if (hash != null && !hash.isBlank()) {
             if (password == null || !passwordEncoder.matches(password, hash))
                 throw new RuntimeException("Wrong password");
         }
 
-        // Check membership by player ID (not object identity) to prevent false "already joined"
         boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
         if (alreadyMember) throw new RuntimeException("Already in this tournament");
 
@@ -89,6 +86,32 @@ public class TournamentService {
         playerRepo.save(player);
         postSystemMessage(t, player.getDisplayName() + " joined the group!", ChatMessage.MessageType.SYSTEM);
         broadcastTournament(t.getId());
+        broadcastChat(t.getId());
+        return t.getId(); // return ID directly — safe across transaction boundary
+    }
+
+    @Transactional
+    public TournamentMember joinTournament(Player player, String name, String password) {
+        Tournament t = tournamentRepo.findByNameIgnoreCase(name.trim())
+                .orElseThrow(() -> new RuntimeException("Tournament not found"));
+
+        String hash = t.getPassword();
+        if (hash != null && !hash.isBlank()) {
+            if (password == null || !passwordEncoder.matches(password, hash))
+                throw new RuntimeException("Wrong password");
+        }
+
+        boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
+        if (alreadyMember) throw new RuntimeException("Already in this tournament");
+
+        TournamentMember m = new TournamentMember();
+        m.setTournament(t); m.setPlayer(player); m.setGuest(false);
+        memberRepo.save(m);
+        player.setTournamentsPlayed(player.getTournamentsPlayed() + 1);
+        playerRepo.save(player);
+        postSystemMessage(t, player.getDisplayName() + " joined the group!", ChatMessage.MessageType.SYSTEM);
+        broadcastTournament(t.getId());
+        broadcastChat(t.getId());
         return m;
     }
 
