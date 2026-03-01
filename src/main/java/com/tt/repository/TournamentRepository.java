@@ -10,10 +10,12 @@ import java.util.Optional;
 
 public interface TournamentRepository extends JpaRepository<Tournament, Long> {
 
+    Optional<Tournament> findByName(String name);
+    boolean existsByName(String name);
 
     Optional<Tournament> findByNameIgnoreCase(String name);
     boolean existsByNameIgnoreCase(String name);
 
-    @Query("SELECT DISTINCT t FROM Tournament t JOIN t.members m WHERE m.player = :player")
+    @Query("SELECT DISTINCT m.tournament FROM TournamentMember m WHERE m.player = :player AND m.isGuest = false")
     List<Tournament> findByMemberPlayer(@Param("player") Player player);
 }
