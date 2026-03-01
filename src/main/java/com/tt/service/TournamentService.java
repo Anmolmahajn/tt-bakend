@@ -53,7 +53,7 @@ public class TournamentService {
             throw new RuntimeException("Tournament name already taken");
         Tournament t = new Tournament();
         t.setName(name.trim());
-        t.setPasswordHash(passwordEncoder.encode(password != null ? password : ""));
+        t.setPassword(passwordEncoder.encode(password != null ? password : ""));
         t.setCreatedBy(creator);
         t.getAdmins().add(creator);
         t = tournamentRepo.save(t);
@@ -72,7 +72,7 @@ public class TournamentService {
                 .orElseThrow(() -> new RuntimeException("Tournament not found"));
 
         // Password check — allow blank password tournaments
-        String hash = t.getPasswordHash();
+        String hash = t.getPassword();
         if (hash != null && !hash.isBlank()) {
             if (password == null || !passwordEncoder.matches(password, hash))
                 throw new RuntimeException("Wrong password");
@@ -181,7 +181,7 @@ public class TournamentService {
         Tournament t = getTournament(tournamentId);
         if (!t.getCreatedBy().getId().equals(admin.getId()))
             throw new RuntimeException("Only creator can change password");
-        t.setPasswordHash(passwordEncoder.encode(newPassword != null ? newPassword : ""));
+        t.setPassword(passwordEncoder.encode(newPassword != null ? newPassword : ""));
         tournamentRepo.save(t);
     }
 
@@ -1395,10 +1395,12 @@ public class TournamentService {
     public Map<String, Object> submitRsvp(Long tournamentId, Player player, boolean attending) {
         Tournament t = getTournament(tournamentId);
         boolean isMember = memberRepo.existsByTournamentIdAndPlayerId(tournamentId, player.getId());
-        if (!isMember) throw new RuntimeException("Not a member of this tournament");
+        boolean isAdm = isAdmin(t, player);
+        if (!isMember && !isAdm) throw new RuntimeException("Not a member of this tournament");
+        // Find member by player ID safely (player is never null for registered users)
         TournamentMember mem = memberRepo.findRanked(tournamentId).stream()
                 .filter(m -> m.getPlayer() != null && m.getPlayer().getId().equals(player.getId()))
-                .findFirst().orElseThrow(() -> new RuntimeException("Member not found"));
+                .findFirst().orElseThrow(() -> new RuntimeException("Member record not found"));
         String response = attending ? "✅ YES" : "❌ NO";
         postSystemMessage(t, mem.getDisplayName() + " replied " + response + " to the RSVP",
                 ChatMessage.MessageType.SYSTEM);
