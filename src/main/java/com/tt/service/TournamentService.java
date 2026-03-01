@@ -813,6 +813,15 @@ public class TournamentService {
             wm.setTotalMatchesPlayed(wm.getTotalMatchesPlayed() + 1);
             wm.setTotalPointsScored(wm.getTotalPointsScored() + ws);
             wm.setTotalPointsConceded(wm.getTotalPointsConceded() + ls);
+            // Update Elo + win streak (only for 1v1, not 2v2 teams)
+            if (!is2v2) {
+                boolean milestone = rankingEngine.updateWinStreak(wm, true);
+                if (milestone && !wm.isGuest() && wm.getPlayer() != null) {
+                    try { pushService.notifyMatchResult(t,
+                            "🔥 " + wm.getDisplayName() + " is on a " + wm.getCurrentWinStreak() + "-match win streak!"); }
+                    catch (Exception ignored) {}
+                }
+            }
             memberRepo.save(wm);
             if (!wm.isGuest() && wm.getPlayer() != null) {
                 Player p = wm.getPlayer();
@@ -827,6 +836,7 @@ public class TournamentService {
             lm.setTotalMatchesPlayed(lm.getTotalMatchesPlayed() + 1);
             lm.setTotalPointsScored(lm.getTotalPointsScored() + ls);
             lm.setTotalPointsConceded(lm.getTotalPointsConceded() + ws);
+            if (!is2v2) rankingEngine.updateWinStreak(lm, false);
             memberRepo.save(lm);
             if (!lm.isGuest() && lm.getPlayer() != null) {
                 Player p = lm.getPlayer();
@@ -834,6 +844,15 @@ public class TournamentService {
                 p.setTotalMatchesPlayed(p.getTotalMatchesPlayed() + 1);
                 playerRepo.save(p);
             }
+        }
+
+        // Elo update (1v1 only — use first member of each side for 2v2)
+        TournamentMember eloWinner = winningMembers.isEmpty() ? null : winningMembers.get(0);
+        TournamentMember eloLoser  = losingMembers.isEmpty()  ? null : losingMembers.get(0);
+        if (eloWinner != null && eloLoser != null) {
+            rankingEngine.updateElo(eloWinner, eloLoser);
+            memberRepo.save(eloWinner);
+            memberRepo.save(eloLoser);
         }
 
         if (m.getTeam1() != null) {
@@ -970,6 +989,36 @@ public class TournamentService {
         }
         broadcastTournament(tournamentId);
         broadcastChat(tournamentId);
+
+        // Increment sessionStreak for all present members
+        for (TournamentMember mem : day.getPresentMembers()) {
+            mem.setSessionStreak(mem.getSessionStreak() + 1);
+            // Session streak milestones: 5, 10, 20, 30 sessions
+            int ss = mem.getSessionStreak();
+            if ((ss == 5 || ss == 10 || ss == 20 || ss == 30) && !mem.isGuest() && mem.getPlayer() != null) {
+                try { pushService.notifyMatchResult(t,
+                        "📅 " + mem.getDisplayName() + " has attended " + ss + " sessions in a row! 🏓"); }
+                catch (Exception ignored) {}
+            }
+            memberRepo.save(mem);
+        }
+
+        // Post an MVP poll so members can vote (chat message with options)
+        if (!day.getPresentMembers().isEmpty()) {
+            String pollOptions = day.getPresentMembers().stream()
+                    .filter(m -> m.getTotalMatchesPlayed() > 0)
+                    .map(m -> "• " + m.getDisplayName())
+                    .limit(8)
+                    .collect(Collectors.joining("\n"));
+            if (!pollOptions.isBlank()) {
+                postSystemMessage(t,
+                        "🗳️ MVP POLL — Vote in chat! Who deserves MVP today?\n" + pollOptions
+                                + "\nReply with a player's name to cast your vote!",
+                        ChatMessage.MessageType.SYSTEM);
+                broadcastChat(tournamentId);
+            }
+        }
+
         return entries;
     }
 
@@ -1129,6 +1178,10 @@ public class TournamentService {
             r.mvpCount = m.getMvpCount();
             r.proficiency = m.isGuest() ? m.getGuestProficiency()
                     : (m.getPlayer() != null ? m.getPlayer().getProficiency() : null);
+            r.eloRating = m.getEloRating();
+            r.currentWinStreak = m.getCurrentWinStreak();
+            r.bestWinStreak = m.getBestWinStreak();
+            r.sessionStreak = m.getSessionStreak();
             result.add(r);
         }
         return result;
@@ -1230,6 +1283,10 @@ public class TournamentService {
         r.mvpCount = m.getMvpCount();
         r.proficiency = m.isGuest() ? m.getGuestProficiency()
                 : (m.getPlayer() != null ? m.getPlayer().getProficiency() : null);
+        r.eloRating = m.getEloRating();
+        r.currentWinStreak = m.getCurrentWinStreak();
+        r.bestWinStreak = m.getBestWinStreak();
+        r.sessionStreak = m.getSessionStreak();
         return r;
     }
 
@@ -1317,6 +1374,113 @@ public class TournamentService {
     private void broadcastChat(Long tid) {
         try { ws.convertAndSend("/topic/tournament/" + tid + "/chat", System.currentTimeMillis()); }
         catch (Exception e) { log.severe("WS error: " + e.getMessage()); }
+    }
+
+    // ── RSVP ──────────────────────────────────────────────────────────────────
+
+    @Transactional
+    public Map<String, Object> sendRsvpCall(Long tournamentId, Player admin) {
+        Tournament t = getTournament(tournamentId);
+        assertAdmin(t, admin);
+        postSystemMessage(t,
+                "📋 RSVP: Are you coming to the next session? Reply YES or NO in chat, or tap the button below!",
+                ChatMessage.MessageType.SYSTEM);
+        try { pushService.notifyMatchResult(t, "📋 RSVP: Are you coming to the next session? Let your admin know!"); }
+        catch (Exception ignored) {}
+        broadcastChat(tournamentId);
+        return Map.of("sent", true, "message", "RSVP notification sent to all members");
+    }
+
+    @Transactional
+    public Map<String, Object> submitRsvp(Long tournamentId, Player player, boolean attending) {
+        Tournament t = getTournament(tournamentId);
+        boolean isMember = memberRepo.existsByTournamentIdAndPlayerId(tournamentId, player.getId());
+        if (!isMember) throw new RuntimeException("Not a member of this tournament");
+        TournamentMember mem = memberRepo.findRanked(tournamentId).stream()
+                .filter(m -> m.getPlayer() != null && m.getPlayer().getId().equals(player.getId()))
+                .findFirst().orElseThrow(() -> new RuntimeException("Member not found"));
+        String response = attending ? "✅ YES" : "❌ NO";
+        postSystemMessage(t, mem.getDisplayName() + " replied " + response + " to the RSVP",
+                ChatMessage.MessageType.SYSTEM);
+        broadcastChat(tournamentId);
+        return Map.of("attending", attending, "name", mem.getDisplayName());
+    }
+
+    // ── SESSION TEMPLATES ─────────────────────────────────────────────────────
+    // Stored as a JSON chat system message with a special prefix — no new table needed.
+    // Frontend saves to AsyncStorage; these endpoints are for sharing across devices.
+
+    @Transactional
+    public Map<String, Object> saveSessionTemplate(Long tournamentId, Player admin, DTOs.SessionTemplateRequest req) {
+        Tournament t = getTournament(tournamentId);
+        assertAdmin(t, admin);
+        // Store template as a special SYSTEM message so it persists on backend
+        String json = String.format(
+                "__TEMPLATE__{\"name\":\"%s\",\"format\":\"%s\",\"nTeams\":%d,\"perTeam\":%d,\"savedBy\":\"%s\"}",
+                req.getName().replace("\"",""), req.getMatchFormat(), req.getNumberOfTeams(),
+                req.getPlayersPerTeam(), admin.getDisplayName());
+        ChatMessage msg = new ChatMessage();
+        msg.setTournament(t);
+        msg.setSender(null);
+        msg.setContent(json);
+        msg.setType(ChatMessage.MessageType.SYSTEM);
+        chatRepo.save(msg);
+        return Map.of("saved", true, "templateName", req.getName());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getSessionTemplates(Long tournamentId, Player player) {
+        Tournament t = getTournament(tournamentId);
+        return chatRepo.findByTournamentOrderBySentAtAsc(t).stream()
+                .filter(m -> m.getContent() != null && m.getContent().startsWith("__TEMPLATE__"))
+                .map(m -> {
+                    try {
+                        String json = m.getContent().substring("__TEMPLATE__".length());
+                        // Parse manually (no Jackson dep assumed here — use simple parsing)
+                        Map<String, Object> result = new java.util.LinkedHashMap<>();
+                        json = json.replaceAll("[{}]", "");
+                        for (String pair : json.split(",")) {
+                            String[] kv = pair.split(":", 2);
+                            if (kv.length == 2) {
+                                result.put(kv[0].replace("\"","").trim(),
+                                        kv[1].replace("\"","").trim());
+                            }
+                        }
+                        result.put("savedAt", m.getSentAt() != null ? m.getSentAt().toString() : "");
+                        return result;
+                    } catch (Exception e) { return null; }
+                })
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    // ── NOTIFICATION PREFERENCES ──────────────────────────────────────────────
+
+    @Transactional
+    public Map<String, Object> updateNotifPrefs(Long tournamentId, Player player, Map<String, Boolean> prefs) {
+        Tournament t = getTournament(tournamentId);
+        TournamentMember mem = memberRepo.findRanked(tournamentId).stream()
+                .filter(m -> m.getPlayer() != null && m.getPlayer().getId().equals(player.getId()))
+                .findFirst().orElseThrow(() -> new RuntimeException("Member not found"));
+        // Build JSON string
+        StringBuilder sb = new StringBuilder("{");
+        prefs.forEach((k, v) -> sb.append("\"").append(k).append("\":").append(v).append(","));
+        if (sb.charAt(sb.length() - 1) == ',') sb.setCharAt(sb.length() - 1, '}');
+        else sb.append("}");
+        mem.setNotifPrefs(sb.toString());
+        memberRepo.save(mem);
+        return Map.of("saved", true, "prefs", sb.toString());
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getNotifPrefs(Long tournamentId, Player player) {
+        TournamentMember mem = memberRepo.findRanked(tournamentId).stream()
+                .filter(m -> m.getPlayer() != null && m.getPlayer().getId().equals(player.getId()))
+                .findFirst().orElse(null);
+        if (mem == null) return Map.of();
+        String prefs = mem.getNotifPrefs();
+        if (prefs == null || prefs.isBlank()) prefs = "{\"MATCH_RESULT\":true,\"CHALLENGE\":true,\"DAY_START\":true,\"MILESTONE\":true}";
+        return Map.of("prefs", prefs);
     }
 
     public Tournament getTournament(Long id) {

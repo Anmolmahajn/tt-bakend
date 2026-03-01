@@ -8,17 +8,13 @@ import java.util.stream.Collectors;
 @Component
 public class RankingEngine {
 
-    /**
-     * Ranks members purely by wins/matches ratio (not win%), then uses AI-style
-     * proficiency as tiebreaker. Members with more matches played at equal ratio
-     * rank higher (more consistent). Zero-match members rank last.
-     */
+    private static final int ELO_BASE   = 1200;
+    private static final int ELO_K_NORMAL = 32;
+    private static final int ELO_K_NEW    = 48; // higher K for first 10 matches
+
     public List<TournamentMember> recomputeRanksWithProficiency(List<TournamentMember> members) {
         Map<String,Integer> profLevel = Map.of(
                 "Beginner",0,"Intermediate",1,"Advanced",2,"Expert",3,"Professional",4);
-
-        // Sort: primary = wins/matches ratio desc, secondary = proficiency desc,
-        //       tertiary = total matches played desc (activity), quaternary = name asc
         List<TournamentMember> sorted = members.stream()
                 .sorted(Comparator
                         .<TournamentMember>comparingDouble(m -> {
@@ -33,16 +29,40 @@ public class RankingEngine {
                         .thenComparingInt(m -> -m.getTotalMatchesPlayed())
                         .thenComparing(TournamentMember::getDisplayName))
                 .collect(Collectors.toList());
-
-        for (int i = 0; i < sorted.size(); i++)
-            sorted.get(i).setCurrentRank(i + 1);
+        for (int i = 0; i < sorted.size(); i++) sorted.get(i).setCurrentRank(i + 1);
         return sorted;
+    }
+
+    /** Update Elo ratings in-place for winner and loser. */
+    public void updateElo(TournamentMember winner, TournamentMember loser) {
+        int rW = winner.getEloRating(), rL = loser.getEloRating();
+        double expW = 1.0 / (1.0 + Math.pow(10, (rL - rW) / 400.0));
+        int kW = winner.getTotalMatchesPlayed() < 10 ? ELO_K_NEW : ELO_K_NORMAL;
+        int kL = loser.getTotalMatchesPlayed()  < 10 ? ELO_K_NEW : ELO_K_NORMAL;
+        winner.setEloRating(Math.max(800, (int) Math.round(rW + kW * (1.0 - expW))));
+        loser.setEloRating (Math.max(800, (int) Math.round(rL + kL * (0.0 - (1.0 - expW)))));
+    }
+
+    /**
+     * Update win streak. Returns true if a milestone was just reached (3/5/10/20 streak).
+     */
+    public boolean updateWinStreak(TournamentMember m, boolean won) {
+        if (won) {
+            m.setCurrentWinStreak(m.getCurrentWinStreak() + 1);
+            if (m.getCurrentWinStreak() > m.getBestWinStreak())
+                m.setBestWinStreak(m.getCurrentWinStreak());
+            int s = m.getCurrentWinStreak();
+            return s == 3 || s == 5 || s == 10 || s == 20;
+        } else {
+            m.setCurrentWinStreak(0);
+            return false;
+        }
     }
 
     public double computeDayScore(int won, int played, int scored, int conceded) {
         if (played == 0) return 0.0;
         double ratio = (double) won / played;
-        double ptDiff = played == 0 ? 0 : (double)(scored - conceded) / (played * 11.0);
+        double ptDiff = (double)(scored - conceded) / (played * 11.0);
         return 0.70 * ratio + 0.30 * ((ptDiff + 1) / 2.0);
     }
 
@@ -51,19 +71,19 @@ public class RankingEngine {
         return s1 / (s1 + s2);
     }
 
-    /** Snake-draft team balancing using composite score (rank + proficiency) */
+    public double predictWinProbElo(int elo1, int elo2) {
+        return 1.0 / (1.0 + Math.pow(10, (elo2 - elo1) / 400.0));
+    }
+
     public List<List<TournamentMember>> balanceTeams(List<TournamentMember> members, int numTeams) {
         Map<String,Integer> profLevel = Map.of(
                 "Beginner",0,"Intermediate",1,"Advanced",2,"Expert",3,"Professional",4);
         List<TournamentMember> sorted = members.stream()
                 .sorted(Comparator.comparingDouble(m -> {
-                    int rank = m.getCurrentRank() == 0 ? members.size() : m.getCurrentRank();
                     String p = m.isGuest() ? m.getGuestProficiency()
                             : (m.getPlayer() != null ? m.getPlayer().getProficiency() : null);
-                    int prof = profLevel.getOrDefault(p, 1);
-                    return rank - prof * 5.0; // lower = better
-                }))
-                .collect(Collectors.toList());
+                    return -(m.getEloRating() + profLevel.getOrDefault(p, 1) * 50.0);
+                })).collect(Collectors.toList());
         List<List<TournamentMember>> teams = new ArrayList<>();
         for (int i = 0; i < numTeams; i++) teams.add(new ArrayList<>());
         for (int i = 0; i < sorted.size(); i++) {
@@ -75,7 +95,5 @@ public class RankingEngine {
     }
 
     public List<List<TournamentMember>> buildCustomTeams(List<TournamentMember> members,
-                                                         int numTeams, int perTeam) {
-        return balanceTeams(members, numTeams);
-    }
+                                                         int numTeams, int perTeam) { return balanceTeams(members, numTeams); }
 }

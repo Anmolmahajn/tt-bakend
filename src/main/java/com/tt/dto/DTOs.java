@@ -89,6 +89,20 @@ public class DTOs {
         public int getRank() { return rank; } public void setRank(int v) { rank=v; }
     }
 
+    public static class SessionTemplateRequest {
+        private String name, matchFormat;
+        private int numberOfTeams, playersPerTeam;
+        public String getName() { return name; } public void setName(String v) { name=v; }
+        public String getMatchFormat() { return matchFormat; } public void setMatchFormat(String v) { matchFormat=v; }
+        public int getNumberOfTeams() { return numberOfTeams; } public void setNumberOfTeams(int v) { numberOfTeams=v; }
+        public int getPlayersPerTeam() { return playersPerTeam; } public void setPlayersPerTeam(int v) { playersPerTeam=v; }
+    }
+
+    public static class RsvpRequest {
+        private boolean attending;
+        public boolean isAttending() { return attending; } public void setAttending(boolean v) { attending=v; }
+    }
+
     // ── RESPONSES ─────────────────────────────────────────────────────────────
 
     public static class AuthResponse {
@@ -132,7 +146,10 @@ public class DTOs {
     public static class MemberResponse {
         public Long id, playerId; public String displayName, proficiency;
         public boolean isGuest; public int currentRank, totalMatchesPlayed,
-                totalMatchesWon, totalMatchesLost, daysPlayed, mvpCount; public double winRate;
+                totalMatchesWon, totalMatchesLost, daysPlayed, mvpCount;
+        public double winRate;
+        // New fields
+        public int eloRating, currentWinStreak, bestWinStreak, sessionStreak;
     }
 
     public static class AdminResponse { public Long playerId; public String displayName; }
@@ -163,6 +180,7 @@ public class DTOs {
     public static class RankingResponse {
         public int rank, totalMatchesWon, totalMatchesPlayed, totalMatchesLost,
                 daysPlayed, rankChangeSinceYesterday, mvpCount;
+        public int eloRating, currentWinStreak, bestWinStreak, sessionStreak;
         public Long memberId; public String displayName, proficiency; public boolean isGuest; public double winRate;
     }
 

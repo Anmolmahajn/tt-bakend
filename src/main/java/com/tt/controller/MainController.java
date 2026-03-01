@@ -325,6 +325,51 @@ public class MainController {
         return ResponseEntity.ok(playerService.getGlobalLeaderboard());
     }
 
+    // ── RSVP ──────────────────────────────────────────────────────────────────
+
+    @PostMapping("/tournaments/{id}/rsvp/send")
+    public ResponseEntity<Map<String, Object>> sendRsvp(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.sendRsvpCall(id, me(ud)));
+    }
+
+    @PostMapping("/tournaments/{id}/rsvp")
+    public ResponseEntity<Map<String, Object>> submitRsvp(
+            @PathVariable Long id, @RequestBody DTOs.RsvpRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.submitRsvp(id, me(ud), req.isAttending()));
+    }
+
+    // ── SESSION TEMPLATES ─────────────────────────────────────────────────────
+
+    @PostMapping("/tournaments/{id}/templates")
+    public ResponseEntity<Map<String, Object>> saveTemplate(
+            @PathVariable Long id, @RequestBody DTOs.SessionTemplateRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.saveSessionTemplate(id, me(ud), req));
+    }
+
+    @GetMapping("/tournaments/{id}/templates")
+    public ResponseEntity<List<Map<String, Object>>> getTemplates(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.getSessionTemplates(id, me(ud)));
+    }
+
+    // ── NOTIFICATION PREFERENCES ──────────────────────────────────────────────
+
+    @PutMapping("/tournaments/{id}/notif-prefs")
+    public ResponseEntity<Map<String, Object>> updateNotifPrefs(
+            @PathVariable Long id, @RequestBody Map<String, Boolean> prefs,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.updateNotifPrefs(id, me(ud), prefs));
+    }
+
+    @GetMapping("/tournaments/{id}/notif-prefs")
+    public ResponseEntity<Map<String, Object>> getNotifPrefs(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.getNotifPrefs(id, me(ud)));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Map<String, String>> handleError(RuntimeException e) {
         return ResponseEntity.badRequest().body(

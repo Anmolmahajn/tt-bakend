@@ -26,6 +26,17 @@ public class TournamentMember {
     private String guestProficiency = "Intermediate";
     // NEW: total MVP awards won across all days
     private int mvpCount = 0;
+    private int eloRating = 1200;
+    private int currentWinStreak = 0;
+    private int bestWinStreak = 0;
+    private int sessionStreak = 0;
+    @Column(length = 512)
+    private String notifPrefs = "{\"MATCH_RESULT\":true,\"CHALLENGE\":true,\"DAY_START\":true,\"MILESTONE\":true}";
+
+
+
+
+
 
     public TournamentMember() {}
     public Long getId() { return id; }
@@ -64,4 +75,18 @@ public class TournamentMember {
     public double getWinRate() {
         return totalMatchesPlayed == 0 ? 0.0 : (double) totalMatchesWon / totalMatchesPlayed * 100;
     }
+    public int getEloRating() { return eloRating; }
+    public void setEloRating(int v) { this.eloRating = v; }
+
+    public int getCurrentWinStreak() { return currentWinStreak; }
+    public void setCurrentWinStreak(int v) { this.currentWinStreak = v; }
+
+    public int getBestWinStreak() { return bestWinStreak; }
+    public void setBestWinStreak(int v) { this.bestWinStreak = v; }
+
+    public int getSessionStreak() { return sessionStreak; }
+    public void setSessionStreak(int v) { this.sessionStreak = v; }
+
+    public String getNotifPrefs() { return notifPrefs; }
+    public void setNotifPrefs(String v) { this.notifPrefs = v; }
 }
