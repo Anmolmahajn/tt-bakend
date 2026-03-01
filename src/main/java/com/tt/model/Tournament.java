@@ -33,6 +33,9 @@ public class Tournament {
     @JoinColumn(name = "created_by_id")
     private Player createdBy;
 
+    @OneToMany(mappedBy = "tournament", fetch = FetchType.LAZY)
+    private List<TournamentMember> members = new ArrayList<>();
+
     public Tournament() {}
 
     public Long getId() { return id; }
@@ -52,4 +55,7 @@ public class Tournament {
 
     public Player getCreatedBy() { return createdBy; }
     public void setCreatedBy(Player createdBy) { this.createdBy = createdBy; }
+
+    public List<TournamentMember> getMembers() { return members; }
+    public void setMembers(List<TournamentMember> members) { this.members = members; }
 }
