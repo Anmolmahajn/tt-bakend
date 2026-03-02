@@ -22,7 +22,7 @@ public class PlayerDetailsService implements UserDetailsService {
 
     public UserDetails loadUserById(Long id) {
         var player = playerRepository.findById(id)
-            .orElseThrow(() -> new UsernameNotFoundException("Not found: " + id));
+                .orElseThrow(() -> new UsernameNotFoundException("Player not found: " + id));
         return build(player);
     }
 
