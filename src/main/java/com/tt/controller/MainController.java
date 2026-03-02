@@ -20,11 +20,14 @@ public class MainController {
     private final TournamentService tournamentService;
     private final PlayerService playerService;
     private final PlayerRepository playerRepo;
+    private final EmailService emailService;
 
     public MainController(AuthService authService, TournamentService tournamentService,
-                          PlayerService playerService, PlayerRepository playerRepo) {
+                          PlayerService playerService, PlayerRepository playerRepo,
+                          EmailService emailService) {
         this.authService = authService; this.tournamentService = tournamentService;
         this.playerService = playerService; this.playerRepo = playerRepo;
+        this.emailService = emailService;
     }
 
     private Player me(UserDetails ud) { return authService.getPlayer(ud.getUsername()); }
@@ -79,6 +82,34 @@ public class MainController {
     @GetMapping("/auth/oauth2-error")
     public ResponseEntity<Map<String,String>> oauth2Error() {
         return ResponseEntity.badRequest().body(Map.of("message","Social login failed. Please try again or use email login."));
+    }
+
+    // ── TEST EMAIL (remove after confirming email works) ──────────────────────
+    // Visit: https://tt-bakend.onrender.com/api/test-email?to=youremail@gmail.com
+    @GetMapping("/test-email")
+    public ResponseEntity<Map<String,Object>> testEmail(@RequestParam String to) {
+        Map<String,Object> result = new java.util.LinkedHashMap<>();
+        result.put("to", to);
+        result.put("MAIL_USERNAME", System.getenv("MAIL_USERNAME"));
+        result.put("MAIL_PASSWORD_SET", System.getenv("MAIL_PASSWORD") != null ? "YES length=" + System.getenv("MAIL_PASSWORD").length() : "NO");
+        result.put("MAIL_HOST", System.getenv("SPRING_MAIL_HOST") != null ? System.getenv("SPRING_MAIL_HOST") : "smtp.gmail.com(default)");
+        try {
+            emailService.generateAndSendOtp(to, "PASSWORD_RESET");
+            result.put("status", "SUCCESS - email sent");
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            result.put("status", "FAILED");
+            result.put("error", e.getMessage());
+            result.put("cause", e.getCause() != null ? e.getCause().getMessage() : "none");
+            result.put("rootCause", getRootCause(e));
+            return ResponseEntity.status(500).body(result);
+        }
+    }
+
+    private String getRootCause(Throwable e) {
+        Throwable cause = e;
+        while (cause.getCause() != null) cause = cause.getCause();
+        return cause.getClass().getSimpleName() + ": " + cause.getMessage();
     }
 
     // ── TOURNAMENTS ───────────────────────────────────────────────────────────

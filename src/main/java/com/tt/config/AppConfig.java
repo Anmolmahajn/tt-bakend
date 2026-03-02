@@ -44,6 +44,7 @@ public class AppConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/auth/**",
+                                "/api/test-email",
                                 "/ws/**",
                                 "/h2-console/**",
                                 "/api/health",
