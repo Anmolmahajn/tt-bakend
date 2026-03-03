@@ -79,12 +79,7 @@ public class TournamentService {
         Tournament t = tournamentRepo.findByNameIgnoreCase(name.trim())
                 .orElseThrow(() -> new RuntimeException("Tournament not found"));
 
-        String hash = t.getPassword();
-        if (hash != null && !hash.isBlank()) {
-            if (password == null || !passwordEncoder.matches(password, hash))
-                throw new RuntimeException("Wrong password");
-        }
-
+        // Invite link bypasses password — the code itself is the proof of access
         boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
         if (alreadyMember) throw new RuntimeException("Already in this tournament");
 
@@ -104,12 +99,7 @@ public class TournamentService {
         Tournament t = tournamentRepo.findByNameIgnoreCase(name.trim())
                 .orElseThrow(() -> new RuntimeException("Tournament not found"));
 
-        String hash = t.getPassword();
-        if (hash != null && !hash.isBlank()) {
-            if (password == null || !passwordEncoder.matches(password, hash))
-                throw new RuntimeException("Wrong password");
-        }
-
+        // Invite link bypasses password — the code itself is the proof of access
         boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
         if (alreadyMember) throw new RuntimeException("Already in this tournament");
 
@@ -1520,16 +1510,11 @@ public class TournamentService {
 
     // ── INVITE CODE JOIN ──────────────────────────────────────────────────────
     @Transactional
-    public Long joinByInviteCode(Player player, String inviteCode, String password) {
+    public Long joinByInviteCode(Player player, String inviteCode) {
         Tournament t = tournamentRepo.findByInviteCode(inviteCode.trim().toUpperCase())
                 .orElseThrow(() -> new RuntimeException("Invalid invite link"));
 
-        String hash = t.getPassword();
-        if (hash != null && !hash.isBlank()) {
-            if (password == null || !passwordEncoder.matches(password, hash))
-                throw new RuntimeException("Wrong password");
-        }
-
+        // Invite link bypasses password — the code itself is the proof of access
         boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
         if (alreadyMember) throw new RuntimeException("Already in this tournament");
 
