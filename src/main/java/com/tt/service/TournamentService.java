@@ -9,6 +9,9 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -56,6 +59,12 @@ public class TournamentService {
         t.setPassword(passwordEncoder.encode(password != null ? password : ""));
         t.setCreatedBy(creator);
         t.getAdmins().add(creator);
+        // Generate unique 8-char invite code
+        String inviteCode;
+        do {
+            inviteCode = java.util.UUID.randomUUID().toString().replace("-","").substring(0,8).toUpperCase();
+        } while (tournamentRepo.findByInviteCode(inviteCode).isPresent());
+        t.setInviteCode(inviteCode);
         t = tournamentRepo.save(t);
         TournamentMember m = new TournamentMember();
         m.setTournament(t); m.setPlayer(creator); m.setGuest(false);
@@ -1222,7 +1231,7 @@ public class TournamentService {
             int daysPlayed = (int) days.stream().filter(d -> d.getStatus() == TournamentDay.DayStatus.ENDED).count();
             long memberCount = memberRepo.countByTournament(t);
             DTOs.TournamentSummaryResponse s = new DTOs.TournamentSummaryResponse();
-            s.id = t.getId(); s.name = t.getName(); s.memberCount = (int) memberCount;
+            s.id = t.getId(); s.name = t.getName(); s.memberCount = (int) memberCount; s.inviteCode = t.getInviteCode();
             s.adminCount = t.getAdmins().size(); s.daysPlayed = daysPlayed;
             s.isAdmin = isAdmin(t, player); s.isMember = true; s.createdAt = t.getCreatedAt();
             s.lastDayStatus = lastDay.map(d -> d.getStatus().name()).orElse("NO_DAYS");
@@ -1239,7 +1248,7 @@ public class TournamentService {
         List<TournamentDay> days = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
                 .filter(d -> d.getDayNumber() >= 0).collect(Collectors.toList());
         DTOs.TournamentDetailResponse res = new DTOs.TournamentDetailResponse();
-        res.id = t.getId(); res.name = t.getName(); res.memberCount = members.size();
+        res.id = t.getId(); res.name = t.getName(); res.memberCount = members.size(); res.inviteCode = t.getInviteCode();
         res.members = members.stream().map(this::toMemberResponse).collect(Collectors.toList());
         res.admins = t.getAdmins().stream().map(a -> {
             DTOs.AdminResponse ar = new DTOs.AdminResponse();
@@ -1506,6 +1515,180 @@ public class TournamentService {
         String prefs = mem.getNotifPrefs();
         if (prefs == null || prefs.isBlank()) prefs = "{\"MATCH_RESULT\":true,\"CHALLENGE\":true,\"DAY_START\":true,\"MILESTONE\":true}";
         return Map.of("prefs", prefs);
+    }
+
+
+    // ── INVITE CODE JOIN ──────────────────────────────────────────────────────
+    @Transactional
+    public Long joinByInviteCode(Player player, String inviteCode, String password) {
+        Tournament t = tournamentRepo.findByInviteCode(inviteCode.trim().toUpperCase())
+                .orElseThrow(() -> new RuntimeException("Invalid invite link"));
+
+        String hash = t.getPassword();
+        if (hash != null && !hash.isBlank()) {
+            if (password == null || !passwordEncoder.matches(password, hash))
+                throw new RuntimeException("Wrong password");
+        }
+
+        boolean alreadyMember = memberRepo.existsByTournamentIdAndPlayerId(t.getId(), player.getId());
+        if (alreadyMember) throw new RuntimeException("Already in this tournament");
+
+        TournamentMember m = new TournamentMember();
+        m.setTournament(t); m.setPlayer(player); m.setGuest(false);
+        memberRepo.save(m);
+        player.setTournamentsPlayed(player.getTournamentsPlayed() + 1);
+        playerRepo.save(player);
+        postSystemMessage(t, player.getDisplayName() + " joined via invite link!", ChatMessage.MessageType.SYSTEM);
+        broadcastTournament(t.getId());
+        broadcastChat(t.getId());
+        return t.getId();
+    }
+
+    // ── REGENERATE INVITE CODE (admin only) ───────────────────────────────────
+    @Transactional
+    public Map<String, Object> regenerateInviteCode(Long tournamentId, Player admin) {
+        Tournament t = getTournament(tournamentId);
+        assertAdmin(t, admin);
+        String inviteCode;
+        do {
+            inviteCode = java.util.UUID.randomUUID().toString().replace("-","").substring(0,8).toUpperCase();
+        } while (tournamentRepo.findByInviteCode(inviteCode).isPresent());
+        t.setInviteCode(inviteCode);
+        tournamentRepo.save(t);
+        return Map.of("inviteCode", inviteCode);
+    }
+
+    // ── SESSION POLL (in chat) ─────────────────────────────────────────────────
+    // Polls are stored as chat messages with type POLL and JSON content
+    // Format: {"question":"When to play?","options":["Mon 6pm","Tue 7pm"],"votes":{"0":[1,2],"1":[3]}}
+    @Transactional
+    public Map<String, Object> createSessionPoll(Long tournamentId, Player creator, String question, java.util.List<String> options) {
+        Tournament t = getTournament(tournamentId);
+        if (!memberRepo.existsByTournamentIdAndPlayerId(tournamentId, creator.getId()))
+            throw new RuntimeException("Not a member");
+        if (options == null || options.size() < 2 || options.size() > 6)
+            throw new RuntimeException("Poll needs 2-6 options");
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode poll = mapper.createObjectNode();
+            poll.put("question", question);
+            ArrayNode optsNode = mapper.createArrayNode();
+            for (String opt : options) optsNode.add(opt);
+            poll.set("options", optsNode);
+            poll.set("votes", mapper.createObjectNode());
+            poll.put("creatorId", creator.getId());
+            ChatMessage msg = new ChatMessage();
+            msg.setTournament(t);
+            msg.setSender(creator);
+            msg.setContent(mapper.writeValueAsString(poll));
+            msg.setType(ChatMessage.MessageType.POLL);
+            chatRepo.save(msg);
+            broadcastChat(tournamentId);
+            return Map.of("success", true, "messageId", msg.getId());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create poll: " + e.getMessage());
+        }
+    }
+
+
+    @Transactional
+    public Map<String, Object> votePoll(Long tournamentId, Long messageId, Player voter, int optionIndex) {
+        getTournament(tournamentId); // validate exists
+        if (!memberRepo.existsByTournamentIdAndPlayerId(tournamentId, voter.getId()))
+            throw new RuntimeException("Not a member");
+
+        ChatMessage msg = chatRepo.findById(messageId)
+                .orElseThrow(() -> new RuntimeException("Poll not found"));
+        if (msg.getType() != ChatMessage.MessageType.POLL)
+            throw new RuntimeException("Not a poll");
+
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode poll = (ObjectNode) mapper.readTree(msg.getContent());
+            ObjectNode votes = poll.has("votes") && !poll.get("votes").isNull()
+                    ? (ObjectNode) poll.get("votes")
+                    : mapper.createObjectNode();
+
+            // Remove voter from all options (allows changing vote)
+            Iterator<Map.Entry<String, com.fasterxml.jackson.databind.JsonNode>> it = votes.fields();
+            while (it.hasNext()) {
+                ArrayNode arr = (ArrayNode) it.next().getValue();
+                for (int i = arr.size() - 1; i >= 0; i--) {
+                    if (arr.get(i).asLong() == voter.getId()) arr.remove(i);
+                }
+            }
+
+            // Add vote to selected option
+            String key = String.valueOf(optionIndex);
+            if (!votes.has(key)) votes.set(key, mapper.createArrayNode());
+            ((ArrayNode) votes.get(key)).add(voter.getId());
+            poll.set("votes", votes);
+
+            msg.setContent(mapper.writeValueAsString(poll));
+            chatRepo.save(msg);
+            broadcastChat(tournamentId);
+            return Map.of("success", true);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to process vote: " + e.getMessage());
+        }
+    }
+
+    // ── MATCH SCHEDULING ──────────────────────────────────────────────────────
+    // Scheduling proposals stored as POLL-type chat messages with special format
+    @Transactional
+    public Map<String, Object> proposeMatchTime(Long tournamentId, Player proposer, Long targetMemberId, String proposedTime, String note) {
+        Tournament t = getTournament(tournamentId);
+        TournamentMember proposerMember = memberRepo.findRanked(tournamentId).stream()
+                .filter(m -> m.getPlayer() != null && m.getPlayer().getId().equals(proposer.getId()))
+                .findFirst().orElseThrow(() -> new RuntimeException("Not a member"));
+        TournamentMember targetMember = memberRepo.findById(targetMemberId)
+                .orElseThrow(() -> new RuntimeException("Target player not found"));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode obj = mapper.createObjectNode();
+            obj.put("type", "SCHEDULE");
+            obj.put("proposerId", proposerMember.getId());
+            obj.put("proposerName", proposer.getDisplayName());
+            obj.put("targetId", targetMember.getId());
+            obj.put("targetName", targetMember.getDisplayName());
+            obj.put("time", proposedTime != null ? proposedTime : "");
+            obj.put("note", note != null ? note : "");
+            obj.put("status", "PENDING");
+            ChatMessage msg = new ChatMessage();
+            msg.setTournament(t);
+            msg.setSender(proposer);
+            msg.setContent(mapper.writeValueAsString(obj));
+            msg.setType(ChatMessage.MessageType.SCHEDULE);
+            chatRepo.save(msg);
+            broadcastChat(tournamentId);
+            return Map.of("success", true, "messageId", msg.getId());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create schedule: " + e.getMessage());
+        }
+    }
+
+    @Transactional
+    public Map<String, Object> respondToSchedule(Long tournamentId, Long messageId, Player responder, String action) {
+        ChatMessage msg = chatRepo.findById(messageId)
+                .orElseThrow(() -> new RuntimeException("Schedule not found"));
+        if (msg.getType() != ChatMessage.MessageType.SCHEDULE)
+            throw new RuntimeException("Not a schedule proposal");
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode obj = (ObjectNode) mapper.readTree(msg.getContent());
+            obj.put("status", action);
+            obj.put("responderId", responder.getId());
+            msg.setContent(mapper.writeValueAsString(obj));
+            chatRepo.save(msg);
+            String systemMsg = "ACCEPT".equals(action)
+                    ? "✅ " + responder.getDisplayName() + " accepted the match proposal!"
+                    : "❌ " + responder.getDisplayName() + " declined the match proposal.";
+            postSystemMessage(msg.getTournament(), systemMsg, ChatMessage.MessageType.SYSTEM);
+            broadcastChat(tournamentId);
+            return Map.of("success", true, "action", action);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to respond: " + e.getMessage());
+        }
     }
 
     public Tournament getTournament(Long id) {

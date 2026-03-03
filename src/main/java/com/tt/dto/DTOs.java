@@ -125,11 +125,11 @@ public class DTOs {
     public static class TournamentSummaryResponse {
         public Long id; public String name; public int memberCount, adminCount, daysPlayed;
         public boolean isAdmin, isMember; public LocalDateTime createdAt;
-        public String lastDayStatus; public int lastDayNumber;
+        public String lastDayStatus; public int lastDayNumber; public String inviteCode;
     }
 
     public static class TournamentDetailResponse {
-        public Long id; public String name; public int memberCount;
+        public Long id; public String name; public int memberCount; public String inviteCode;
         public List<MemberResponse> members; public List<AdminResponse> admins;
         public List<DayResponse> days; public DayResponse currentDay;
         public List<RankingResponse> rankings; public LocalDateTime createdAt; public boolean isAdmin;
@@ -236,4 +236,53 @@ public class DTOs {
         public int dayNumber, rank, matchesWon, matchesPlayed, pointsScored, pointsConceded;
         public double dayScore; public boolean isMvp; public LocalDateTime date;
     }
+
+    // ── MATCH SCHEDULING ──────────────────────────────────────────────────────
+    public static class ScheduleMatchRequest {
+        private Long targetMemberId;
+        private String proposedTime; // ISO datetime string
+        private String note;
+        public Long getTargetMemberId() { return targetMemberId; }
+        public void setTargetMemberId(Long v) { this.targetMemberId = v; }
+        public String getProposedTime() { return proposedTime; }
+        public void setProposedTime(String v) { this.proposedTime = v; }
+        public String getNote() { return note; }
+        public void setNote(String v) { this.note = v; }
+    }
+
+    public static class ScheduleResponseRequest {
+        private String action; // "ACCEPT" or "DECLINE"
+        private Long scheduleId;
+        public String getAction() { return action; }
+        public void setAction(String v) { this.action = v; }
+        public Long getScheduleId() { return scheduleId; }
+        public void setScheduleId(Long v) { this.scheduleId = v; }
+    }
+
+    // ── SESSION POLL ──────────────────────────────────────────────────────────
+    public static class CreatePollRequest {
+        private String question;
+        private java.util.List<String> options;
+        public String getQuestion() { return question; }
+        public void setQuestion(String v) { this.question = v; }
+        public java.util.List<String> getOptions() { return options; }
+        public void setOptions(java.util.List<String> v) { this.options = v; }
+    }
+
+    public static class PollVoteRequest {
+        private int optionIndex;
+        public int getOptionIndex() { return optionIndex; }
+        public void setOptionIndex(int v) { this.optionIndex = v; }
+    }
+
+    // ── INVITE ────────────────────────────────────────────────────────────────
+    public static class InviteJoinRequest {
+        private String inviteCode;
+        private String password; // optional, if tournament has password
+        public String getInviteCode() { return inviteCode; }
+        public void setInviteCode(String v) { this.inviteCode = v; }
+        public String getPassword() { return password; }
+        public void setPassword(String v) { this.password = v; }
+    }
+
 }

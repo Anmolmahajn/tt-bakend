@@ -19,6 +19,10 @@ public class Tournament {
 
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    // Unique invite code for sharing — generated on tournament creation
+    @Column(unique = true)
+    private String inviteCode;
+
     // EAGER — always load with Tournament so isAdmin() works outside @Transactional
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
@@ -46,6 +50,9 @@ public class Tournament {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public String getInviteCode() { return inviteCode; }
+    public void setInviteCode(String inviteCode) { this.inviteCode = inviteCode; }
 
     public List<Player> getAdmins() { return admins; }
     public void setAdmins(List<Player> admins) { this.admins = admins; }

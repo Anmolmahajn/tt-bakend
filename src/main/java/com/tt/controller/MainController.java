@@ -434,6 +434,61 @@ public class MainController {
         return ResponseEntity.ok(tournamentService.getNotifPrefs(id, me(ud)));
     }
 
+
+    // ── INVITE CODE ───────────────────────────────────────────────────────────
+
+    @PostMapping("/tournaments/join-invite")
+    public ResponseEntity<DTOs.TournamentDetailResponse> joinByInvite(
+            @RequestBody DTOs.InviteJoinRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        Player p = me(ud);
+        Long tournamentId = tournamentService.joinByInviteCode(p, req.getInviteCode(), req.getPassword());
+        return ResponseEntity.ok(tournamentService.getTournamentDetail(tournamentId, p));
+    }
+
+    @PostMapping("/tournaments/{id}/invite/regenerate")
+    public ResponseEntity<Map<String, Object>> regenerateInvite(
+            @PathVariable Long id, @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.regenerateInviteCode(id, me(ud)));
+    }
+
+    // ── SESSION POLL ──────────────────────────────────────────────────────────
+
+    @PostMapping("/tournaments/{id}/poll")
+    public ResponseEntity<Map<String, Object>> createPoll(
+            @PathVariable Long id, @RequestBody DTOs.CreatePollRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.createSessionPoll(
+                id, me(ud), req.getQuestion(), req.getOptions()));
+    }
+
+    @PostMapping("/tournaments/{id}/poll/{messageId}/vote")
+    public ResponseEntity<Map<String, Object>> votePoll(
+            @PathVariable Long id, @PathVariable Long messageId,
+            @RequestBody DTOs.PollVoteRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.votePoll(id, messageId, me(ud), req.getOptionIndex()));
+    }
+
+    // ── MATCH SCHEDULING ──────────────────────────────────────────────────────
+
+    @PostMapping("/tournaments/{id}/schedule")
+    public ResponseEntity<Map<String, Object>> proposeMatch(
+            @PathVariable Long id, @RequestBody DTOs.ScheduleMatchRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.proposeMatchTime(
+                id, me(ud), req.getTargetMemberId(), req.getProposedTime(), req.getNote()));
+    }
+
+    @PostMapping("/tournaments/{id}/schedule/{messageId}/respond")
+    public ResponseEntity<Map<String, Object>> respondSchedule(
+            @PathVariable Long id, @PathVariable Long messageId,
+            @RequestBody DTOs.ScheduleResponseRequest req,
+            @AuthenticationPrincipal UserDetails ud) {
+        return ResponseEntity.ok(tournamentService.respondToSchedule(
+                id, messageId, me(ud), req.getAction()));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Map<String, String>> handleError(RuntimeException e) {
         String msg = e.getMessage() != null ? e.getMessage() : "An error occurred";

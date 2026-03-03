@@ -30,5 +30,7 @@ public class ChatMessage {
     public LocalDateTime getSentAt() { return sentAt; }
     public void setSentAt(LocalDateTime sentAt) { this.sentAt = sentAt; }
 
-    public enum MessageType { TEXT, SYSTEM, MATCH_RESULT, DAY_STARTED, DAY_ENDED }
+    public enum MessageType {
+        TEXT, SYSTEM, MATCH_RESULT, DAY_STARTED, DAY_ENDED, CHALLENGE, POLL, SCHEDULE
+    }
 }

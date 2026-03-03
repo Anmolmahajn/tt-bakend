@@ -18,4 +18,6 @@ public interface TournamentRepository extends JpaRepository<Tournament, Long> {
 
     @Query("SELECT DISTINCT m.tournament FROM TournamentMember m WHERE m.player = :player AND m.isGuest = false")
     List<Tournament> findByMemberPlayer(@Param("player") Player player);
+
+    Optional<Tournament> findByInviteCode(String inviteCode);
 }
