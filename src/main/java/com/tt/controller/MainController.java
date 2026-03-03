@@ -442,8 +442,7 @@ public class MainController {
             @RequestBody DTOs.InviteJoinRequest req,
             @AuthenticationPrincipal UserDetails ud) {
         Player p = me(ud);
-        Long tournamentId = tournamentService.joinByInviteCode(p, req.getInviteCode(), req.getPassword());
-        return ResponseEntity.ok(tournamentService.getTournamentDetail(tournamentId, p));
+        Long tournamentId = tournamentService.joinByInviteCode(p, req.getInviteCode());        return ResponseEntity.ok(tournamentService.getTournamentDetail(tournamentId, p));
     }
 
     @PostMapping("/tournaments/{id}/invite/regenerate")
