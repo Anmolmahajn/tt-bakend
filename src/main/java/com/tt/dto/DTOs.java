@@ -138,9 +138,10 @@ public class DTOs {
     // ── NEW: Lightweight response for Today tab polling ───────────────────────
     // Only returns current day + matches — much faster than full TournamentDetailResponse
     public static class TodayResponse {
-        public DayResponse currentDay;   // null if no active day
+        public DayResponse currentDay;        // null if no active session
+        public List<MatchResponse> challengeMatches; // challenge matches outside session
         public boolean isAdmin;
-        public long serverTime;          // ms since epoch
+        public long serverTime;
     }
 
     public static class MemberResponse {

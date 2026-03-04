@@ -1264,12 +1264,24 @@ public class TournamentService {
         DTOs.TodayResponse res = new DTOs.TodayResponse();
         res.isAdmin = isAdmin(t, requester);
         res.serverTime = System.currentTimeMillis();
-        // Only return real days (not the challenge bucket) as the current day
+
+        // Active real session (dayNumber >= 0)
         res.currentDay = dayRepo.findByTournamentOrderByDayNumberAsc(t).stream()
                 .filter(d -> d.getDayNumber() >= 0 && d.getStatus() == TournamentDay.DayStatus.IN_PROGRESS)
                 .reduce((a, b) -> b)
                 .map(d -> toDayResponse(d, true))
                 .orElse(null);
+
+        // Challenge-bucket matches (dayNumber = -1) — always show in Today tab
+        dayRepo.findFirstByTournamentAndDayNumberOrderByIdDesc(t, -1).ifPresent(bucketDay -> {
+            List<Match> bucketMatches = matchRepo.findByDayOrderByMatchNumberAsc(bucketDay);
+            if (!bucketMatches.isEmpty()) {
+                res.challengeMatches = bucketMatches.stream()
+                        .map(this::toMatchResponse)
+                        .collect(Collectors.toList());
+            }
+        });
+
         return res;
     }
 
