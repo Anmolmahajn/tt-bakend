@@ -560,195 +560,213 @@ public class TournamentService {
     /**
      * Generates 2v2 matches for the day.
      *
-     * EVEN players (n even):
-     *   Standard greedy scheduler, every player gets (n/2 - 1) matches.
+     * EVEN players:
+     *   Sort by skill, pair rank-1+rank-n, rank-2+rank-(n-1), … to form balanced teams.
+     *   Every team plays every other team once — standard round-robin.
      *
-     * ODD players (n odd):
-     *   One player can't be left solo. We use a greedy scheduler over all valid
-     *   C(n,4) * 3 two-team combinations so every player gets exactly 4 matches —
-     *   no one sits out permanently and every match is always strictly 2v2.
+     * ODD players — per user spec:
+     *   Step 1. The (n-1) even players form balanced teams of 2 exactly as above.
+     *   Step 2. The solo player (worst-ranked leftover) is attached to each round-robin
+     *           match by temporarily "borrowing" one player from one of the two competing
+     *           teams to be their partner. The borrowed player is chosen so that the
+     *           resulting two teams remain as skill-balanced as possible:
+     *             - solo + borrowed  vs  remaining three players split optimally.
+     *           This produces (n-1)/2 * ((n-1)/2 - 1) / 2 + extra_solo_matches.
+     *   Step 3. Across all matches the solo player's appearances equal those of the
+     *           most-played regular player (±1 at most), so no one sits out unfairly.
      *
-     * SKILL BALANCE (new):
-     *   Every matchup is scored on two axes simultaneously:
-     *     1. Fairness score  — how many underpowered players (low appearances) it includes.
-     *     2. Balance score   — how close the two teams are in combined skill strength.
-     *        skill(player) = rank - proficiency * PROF_WEIGHT   (lower = stronger)
-     *        balance       = max_possible_imbalance - |skillA - skillB|
-     *   Final score = FAIRNESS_WEIGHT * fairnessScore + BALANCE_WEIGHT * balanceScore
-     *   Weights are tuned so fairness is always respected first (no one is starved),
-     *   but among equally-fair options the most balanced match wins.
+     *   Every match is ALWAYS strictly 2v2 — exactly 2 players per team, 4 per match.
      *
-     *   Within each chosen matchup the two players inside each team are also arranged
-     *   strong+weak (snake-draft) so neither team has both top players.
+     * SKILL BALANCE:
+     *   skill(player) = rank − proficiency × PROF_WEIGHT   (lower = stronger)
+     *   Teams are paired snake-draft style (rank-1 & rank-n on same team, etc.)
+     *   so combined team skill scores are as close as possible.
+     *   For the solo's partner, we pick whichever available player minimises
+     *   |skill(solo + partner) − skill(remaining two)|.
      */
-    private void generateBalanced2v2(Tournament t, TournamentDay day, List<TournamentMember> present, int startMatchNum) {
+    private void generateBalanced2v2(Tournament t, TournamentDay day,
+                                     List<TournamentMember> present, int startMatchNum) {
         int n = present.size();
         if (n < 4) {
             generateScheduledFreeForAll(t, day, present, startMatchNum);
             return;
         }
 
-        // ── Tuning constants ─────────────────────────────────────────────────
-        final double PROF_WEIGHT     = 3.0;   // proficiency level → rank-equivalent points
-        final double FAIRNESS_WEIGHT = 100.0; // weight for equal-appearances objective
-        final double BALANCE_WEIGHT  = 1.0;   // weight for skill-balance objective
-
-        // ── Skill score per player (lower = stronger) ────────────────────────
+        final double PROF_WEIGHT = 3.0;
         Map<String,Integer> profLevel = Map.of(
                 "Beginner",0,"Intermediate",1,"Advanced",2,"Expert",3,"Professional",4);
-        // First pass: compute raw skill scores
-        double[] skill = new double[n];
-        List<TournamentMember> members = new ArrayList<>(present);
+
+        // ── Compute composite skill score for every player (lower = stronger) ──
+        double[] rawSkill = new double[n];
+        List<TournamentMember> all = new ArrayList<>(present);
         for (int i = 0; i < n; i++) {
-            TournamentMember m = members.get(i);
+            TournamentMember m = all.get(i);
             int rank = m.getCurrentRank() == 0 ? n : m.getCurrentRank();
             String p = m.isGuest() ? m.getGuestProficiency()
                     : (m.getPlayer() != null ? m.getPlayer().getProficiency() : null);
-            int prof = profLevel.getOrDefault(p, 1);
-            skill[i] = rank - prof * PROF_WEIGHT;
+            rawSkill[i] = rank - profLevel.getOrDefault(p, 1) * PROF_WEIGHT;
         }
 
-        // Sort players by skill score ascending (strongest first)
+        // Sort all players by skill ascending (strongest first)
         Integer[] order = new Integer[n];
         for (int i = 0; i < n; i++) order[i] = i;
-        Arrays.sort(order, Comparator.comparingDouble(i -> skill[i]));
-        // Re-index so sorted[i] refers to sorted order
+        Arrays.sort(order, Comparator.comparingDouble(i -> rawSkill[i]));
+
         List<TournamentMember> sorted = new ArrayList<>();
-        double[] sortedSkill = new double[n];
+        double[] sk = new double[n];
+        for (int i = 0; i < n; i++) { sorted.add(all.get(order[i])); sk[i] = rawSkill[order[i]]; }
+
+        // ── Split: even pool vs solo ─────────────────────────────────────────
+        boolean hasOdd = (n % 2 != 0);
+        // Solo = the median-ranked player (index n/2 in sorted list)
+        // Using median keeps the solo at mid-skill so their team is easiest to balance.
+        int soloIdx = hasOdd ? n / 2 : -1;
+        TournamentMember solo = hasOdd ? sorted.get(soloIdx) : null;
+        double soloSk = hasOdd ? sk[soloIdx] : 0;
+
+        // Even pool: all players except solo
+        List<TournamentMember> even = new ArrayList<>();
+        double[] evenSk = new double[n - (hasOdd ? 1 : 0)];
+        int ei = 0;
         for (int i = 0; i < n; i++) {
-            sorted.add(members.get(order[i]));
-            sortedSkill[i] = skill[order[i]];
+            if (i == soloIdx) continue;
+            even.add(sorted.get(i));
+            evenSk[ei++] = sk[i];
+        }
+        int ne = even.size(); // always even
+
+        // ── Form balanced teams of 2 from even pool (snake-draft) ────────────
+        // Pair rank-0 with rank-(ne-1), rank-1 with rank-(ne-2), etc.
+        // This minimises the skill gap between partners and between opposing teams.
+        int numTeams = ne / 2;
+        List<TournamentMember[]> teams = new ArrayList<>();   // teams[i] = {playerA, playerB}
+        double[] teamSk = new double[numTeams];               // combined skill of each team
+        for (int i = 0; i < numTeams; i++) {
+            teams.add(new TournamentMember[]{ even.get(i), even.get(ne - 1 - i) });
+            teamSk[i] = evenSk[i] + evenSk[ne - 1 - i];
         }
 
-        // Max possible imbalance (used to normalise balance score to positive range)
-        double maxImbalance = 0;
-        for (int i = 0; i < n; i++)
-            for (int j = i+1; j < n; j++)
-                maxImbalance = Math.max(maxImbalance, Math.abs(sortedSkill[i] - sortedSkill[j]));
-        maxImbalance = Math.max(maxImbalance * 2, 1.0); // *2 because two players per team
+        // ── Generate all team matchups (round-robin) ─────────────────────────
+        // Each matchup = (teamA index, teamB index).
+        // Sort matchups by |teamA_skill - teamB_skill| ascending so most balanced
+        // matches are scheduled first (they tend to be most competitive).
+        List<int[]> matchups = new ArrayList<>();
+        for (int i = 0; i < numTeams; i++)
+            for (int j = i + 1; j < numTeams; j++)
+                matchups.add(new int[]{i, j});
+        matchups.sort(Comparator.comparingDouble(mu -> Math.abs(teamSk[mu[0]] - teamSk[mu[1]])));
 
-        // ── Target appearances per player ────────────────────────────────────
-        int target;
-        if (n % 2 == 0) {
-            target = Math.max((n / 2) - 1, 1);
-        } else {
-            target = 4; // smallest t where t*n is divisible by 4 (gcd(4, odd n) = 1)
-        }
-
-        // ── Build all valid 2v2 matchups ─────────────────────────────────────
-        // For each group of 4 distinct players {i,j,k,l}, there are 3 ways to form
-        // two teams of 2: (ij vs kl), (ik vs jl), (il vs jk).
-        // We record the "balance cost" of each split at construction time.
-        record Matchup(int a0, int a1, int b0, int b1, double balanceCost) {}
-        List<Matchup> allMatchups = new ArrayList<>();
-        for (int i = 0; i < n; i++)
-            for (int j = i+1; j < n; j++)
-                for (int k = j+1; k < n; k++)
-                    for (int l = k+1; l < n; l++) {
-                        // Three splits — compute |teamA_skill - teamB_skill| for each
-                        double si=sortedSkill[i], sj=sortedSkill[j], sk=sortedSkill[k], sl=sortedSkill[l];
-                        allMatchups.add(new Matchup(i,j,k,l, Math.abs((si+sj)-(sk+sl)))); // (ij) vs (kl)
-                        allMatchups.add(new Matchup(i,k,j,l, Math.abs((si+sk)-(sj+sl)))); // (ik) vs (jl)
-                        allMatchups.add(new Matchup(i,l,j,k, Math.abs((si+sl)-(sj+sk)))); // (il) vs (jk)
-                    }
-
-        // ── Greedy scheduler ─────────────────────────────────────────────────
-        // Combined score = FAIRNESS_WEIGHT * fairnessScore + BALANCE_WEIGHT * balanceScore
-        //   fairnessScore = sum of (target - appearances[p]) for each of the 4 players
-        //                   + n * bonus for each player at minimum appearances
-        //   balanceScore  = maxImbalance - balanceCost   (higher = more balanced)
-        int[] appearances = new int[n];
-        boolean[] usedMatchup = new boolean[allMatchups.size()];
-        List<Matchup> chosen = new ArrayList<>();
-
-        while (true) {
-            boolean allDone = true;
-            for (int a : appearances) if (a < target) { allDone = false; break; }
-            if (allDone) break;
-
-            int minApp = target;
-            for (int a : appearances) minApp = Math.min(minApp, a);
-
-            int bestIdx = -1;
-            double bestScore = Double.NEGATIVE_INFINITY;
-
-            for (int mi = 0; mi < allMatchups.size(); mi++) {
-                if (usedMatchup[mi]) continue;
-                Matchup mu = allMatchups.get(mi);
-                int[] ps = {mu.a0(), mu.a1(), mu.b0(), mu.b1()};
-
-                // Hard constraint: no player may exceed target appearances
-                boolean overflow = false;
-                for (int p : ps) if (appearances[p] >= target) { overflow = true; break; }
-                if (overflow) continue;
-
-                // Fairness score
-                double fairness = 0;
-                for (int p : ps) {
-                    fairness += (target - appearances[p]);
-                    if (appearances[p] == minApp) fairness += n; // bonus for most-behind player
-                }
-
-                // Balance score: reward smaller team-skill gap
-                double balance = maxImbalance - mu.balanceCost();
-
-                double score = FAIRNESS_WEIGHT * fairness + BALANCE_WEIGHT * balance;
-                if (score > bestScore) { bestScore = score; bestIdx = mi; }
-            }
-
-            if (bestIdx < 0) break;
-
-            Matchup mu = allMatchups.get(bestIdx);
-            chosen.add(mu);
-            usedMatchup[bestIdx] = true;
-            appearances[mu.a0()]++;
-            appearances[mu.a1()]++;
-            appearances[mu.b0()]++;
-            appearances[mu.b1()]++;
-        }
-
-        // ── Build Team and Match entities ─────────────────────────────────────
-        // Within each chosen matchup, apply snake-draft team assignment:
-        //   sort the 4 players by skill, assign rank-1 & rank-4 to team A,
-        //   rank-2 & rank-3 to team B → both teams get one strong + one weaker player.
-        // (This is the "strong+weak" pairing that minimises within-match team imbalance.)
         String[] teamNames = {"Team Alpha","Team Beta","Team Gamma","Team Delta",
                 "Team Epsilon","Team Zeta","Team Eta","Team Theta"};
         List<Match> matches = new ArrayList<>();
         int matchNum = startMatchNum;
 
-        for (int mi = 0; mi < chosen.size(); mi++) {
-            Matchup mu = chosen.get(mi);
-            // Sort the 4 players in this match by skill (ascending = strongest first)
-            int[] idxs = {mu.a0(), mu.a1(), mu.b0(), mu.b1()};
-            // Insertion-sort the 4 indices by sortedSkill
-            for (int a = 1; a < 4; a++) {
-                int key = idxs[a]; int b = a - 1;
-                while (b >= 0 && sortedSkill[idxs[b]] > sortedSkill[key]) {
-                    idxs[b+1] = idxs[b]; b--;
-                }
-                idxs[b+1] = key;
-            }
-            // Snake draft: rank-1 & rank-4 → Team A (balanced), rank-2 & rank-3 → Team B
-            // This guarantees |skillA - skillB| is minimised among all 3 splits.
-            List<TournamentMember> membersA = List.of(sorted.get(idxs[0]), sorted.get(idxs[3]));
-            List<TournamentMember> membersB = List.of(sorted.get(idxs[1]), sorted.get(idxs[2]));
+        // ── Build standard 2v2 matches from even pool ────────────────────────
+        for (int[] mu : matchups) {
+            TournamentMember[] tA = teams.get(mu[0]);
+            TournamentMember[] tB = teams.get(mu[1]);
 
-            double avgA = (sortedSkill[idxs[0]] + sortedSkill[idxs[3]]) / 2.0;
-            double avgB = (sortedSkill[idxs[1]] + sortedSkill[idxs[2]]) / 2.0;
+            List<TournamentMember> mA = List.of(tA[0], tA[1]);
+            List<TournamentMember> mB = List.of(tB[0], tB[1]);
 
             Team teamA = new Team();
-            teamA.setName(teamNames[(mi * 2    ) % teamNames.length]);
-            teamA.setTournament(t); teamA.setDay(day); teamA.setMembers(membersA); teamA.setAvgRank(avgA);
+            teamA.setName(teamNames[(matchNum * 2    ) % teamNames.length]);
+            teamA.setTournament(t); teamA.setDay(day); teamA.setMembers(mA);
+            teamA.setAvgRank((teamSk[mu[0]]) / 2.0);
 
             Team teamB = new Team();
-            teamB.setName(teamNames[(mi * 2 + 1) % teamNames.length]);
-            teamB.setTournament(t); teamB.setDay(day); teamB.setMembers(membersB); teamB.setAvgRank(avgB);
+            teamB.setName(teamNames[(matchNum * 2 + 1) % teamNames.length]);
+            teamB.setTournament(t); teamB.setDay(day); teamB.setMembers(mB);
+            teamB.setAvgRank((teamSk[mu[1]]) / 2.0);
 
             teamRepo.save(teamA); teamRepo.save(teamB);
-            matches.add(buildMatch(t, day,
-                    membersA.get(0), membersB.get(0),
-                    teamA, teamB, matchNum++, n));
+            matches.add(buildMatch(t, day, tA[0], tB[0], teamA, teamB, matchNum++, n));
+        }
+
+        // ── Solo player matches ───────────────────────────────────────────────
+        // The solo plays soloTarget extra matches (= numTeams - 1, same as regular players).
+        // Each solo match:
+        //   1. Pick partner from ALL n-1 even-pool players:
+        //      - rotate through even-pool in order of fewest "solo-partner" appearances
+        //        so every player gets roughly equal turns as the solo's partner.
+        //   2. Pick 2 opponents from the remaining n-2 players:
+        //      - try all C(n-2, 2) pairs and pick the one whose combined skill
+        //        is closest to (skill[solo] + skill[partner]).
+        //   Result: solo + partner  vs  opp1 + opp2  — always strictly 2v2,
+        //   always as skill-balanced as possible, partner rotates across all n-1.
+        if (hasOdd) {
+            int soloTarget = Math.max(numTeams - 1, 1);
+
+            // soloPartnerCount[i] tracks how many times even[i] has been solo's partner
+            int[] soloPartnerCount = new int[ne];
+
+            for (int soloMatch = 0; soloMatch < soloTarget; soloMatch++) {
+
+                // ── Step 1: pick partner — fewest prior partner appearances first,
+                //    break ties by choosing whoever minimises team imbalance. ──────
+                int partnerIdx = -1;
+                double bestPartnerScore = Double.MAX_VALUE;
+
+                for (int pi = 0; pi < ne; pi++) {
+                    // Compute the best possible imbalance if pi is the partner
+                    double soloTeamSk = soloSk + evenSk[pi];
+                    // Best opponent pair: try all C(ne-1, 2) combos among remaining players
+                    double bestOppImbalance = Double.MAX_VALUE;
+                    for (int oi = 0; oi < ne; oi++) {
+                        if (oi == pi) continue;
+                        for (int oj = oi + 1; oj < ne; oj++) {
+                            if (oj == pi) continue;
+                            double oppSk = evenSk[oi] + evenSk[oj];
+                            double imb = Math.abs(soloTeamSk - oppSk);
+                            if (imb < bestOppImbalance) bestOppImbalance = imb;
+                        }
+                    }
+                    // Score = fairness penalty (×1000 so it dominates) + best-case imbalance
+                    double score = soloPartnerCount[pi] * 1000.0 + bestOppImbalance;
+                    if (score < bestPartnerScore) { bestPartnerScore = score; partnerIdx = pi; }
+                }
+
+                soloPartnerCount[partnerIdx]++;
+                TournamentMember partner = even.get(partnerIdx);
+                double soloTeamSk = soloSk + evenSk[partnerIdx];
+
+                // ── Step 2: pick the 2 opponents from remaining n-2 players
+                //    that minimise |soloTeamSk - oppTeamSk|. ──────────────────
+                int opp1Idx = -1, opp2Idx = -1;
+                double bestImbalance = Double.MAX_VALUE;
+                for (int oi = 0; oi < ne; oi++) {
+                    if (oi == partnerIdx) continue;
+                    for (int oj = oi + 1; oj < ne; oj++) {
+                        if (oj == partnerIdx) continue;
+                        double imb = Math.abs(soloTeamSk - (evenSk[oi] + evenSk[oj]));
+                        if (imb < bestImbalance) {
+                            bestImbalance = imb; opp1Idx = oi; opp2Idx = oj;
+                        }
+                    }
+                }
+
+                TournamentMember opp1 = even.get(opp1Idx);
+                TournamentMember opp2 = even.get(opp2Idx);
+                double oppTeamSk   = evenSk[opp1Idx] + evenSk[opp2Idx];
+
+                List<TournamentMember> soloSide = List.of(solo, partner);
+                List<TournamentMember> oppSide  = List.of(opp1, opp2);
+
+                Team soloTeam = new Team();
+                soloTeam.setName(teamNames[(matchNum * 2    ) % teamNames.length]);
+                soloTeam.setTournament(t); soloTeam.setDay(day);
+                soloTeam.setMembers(soloSide);
+                soloTeam.setAvgRank((soloSk + evenSk[partnerIdx]) / 2.0);
+
+                Team oppTeam = new Team();
+                oppTeam.setName(teamNames[(matchNum * 2 + 1) % teamNames.length]);
+                oppTeam.setTournament(t); oppTeam.setDay(day);
+                oppTeam.setMembers(oppSide);
+                oppTeam.setAvgRank(oppTeamSk / 2.0);
+
+                teamRepo.save(soloTeam); teamRepo.save(oppTeam);
+                matches.add(buildMatch(t, day, solo, opp1, soloTeam, oppTeam, matchNum++, n));
+            }
         }
 
         if (!matches.isEmpty()) activateFirst(matches.get(0));
