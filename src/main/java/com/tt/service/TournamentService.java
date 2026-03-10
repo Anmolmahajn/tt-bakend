@@ -314,16 +314,7 @@ public class TournamentService {
                     List<Match> leftover = matchRepo.findByDayOrderByMatchNumberAsc(existing).stream()
                             .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
                             .collect(Collectors.toList());
-                    leftover.forEach(m -> { m.setWinner(null); matchRepo.save(m); });
-                    matchRepo.flush();
-                    matchRepo.deleteAll(leftover);
-                    matchRepo.flush();
-                    teamRepo.findByDayOrderByMatchesWonDesc(existing).forEach(team -> {
-                        team.getMembers().clear(); teamRepo.save(team);
-                    });
-                    teamRepo.flush();
-                    teamRepo.deleteAll(teamRepo.findByDayOrderByMatchesWonDesc(existing));
-                    teamRepo.flush();
+                    deletePendingMatchesAndTeams(existing);
                     existing.getPresentMembers().clear();
                     existing.setStatus(TournamentDay.DayStatus.ENDED);
                     existing.setEndedAt(LocalDateTime.now());
@@ -375,23 +366,7 @@ public class TournamentService {
                 .anyMatch(m -> m.getId().equals(newMemberId));
         if (alreadyPresent) throw new RuntimeException("Player already in today's session");
 
-        List<Match> allMatches = matchRepo.findByDayOrderByMatchNumberAsc(day);
-        int completedCount = (int) allMatches.stream()
-                .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
-
-        List<Match> toDelete = allMatches.stream()
-                .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
-                .collect(Collectors.toList());
-        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
-        matchRepo.flush();
-        matchRepo.deleteAll(toDelete);
-        matchRepo.flush();
-
-        List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
-        teamRepo.flush();
-        teamRepo.deleteAll(teams);
-        teamRepo.flush();
+        int completedCount = deletePendingMatchesAndTeams(day);
 
         List<TournamentMember> newPresent = new ArrayList<>(day.getPresentMembers());
         newPresent.add(newMember);
@@ -426,23 +401,7 @@ public class TournamentService {
         boolean isPresent = day.getPresentMembers().stream().anyMatch(m -> m.getId().equals(memberId));
         if (!isPresent) throw new RuntimeException("Player is not in today's session");
 
-        List<Match> allMatches = matchRepo.findByDayOrderByMatchNumberAsc(day);
-        int completedCount = (int) allMatches.stream()
-                .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
-
-        List<Match> toDelete = allMatches.stream()
-                .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
-                .collect(Collectors.toList());
-        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
-        matchRepo.flush();
-        matchRepo.deleteAll(toDelete);
-        matchRepo.flush();
-
-        List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
-        teamRepo.flush();
-        teamRepo.deleteAll(teams);
-        teamRepo.flush();
+        int completedCount = deletePendingMatchesAndTeams(day);
 
         List<TournamentMember> newPresent = day.getPresentMembers().stream()
                 .filter(m -> !m.getId().equals(memberId))
@@ -474,23 +433,10 @@ public class TournamentService {
                         t, TournamentDay.DayStatus.IN_PROGRESS)
                 .orElseThrow(() -> new RuntimeException("No active day"));
 
-        List<Match> allMatches = matchRepo.findByDayOrderByMatchNumberAsc(day);
-        int completedCount = (int) allMatches.stream()
-                .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED).count();
-
-        List<Match> toDelete = allMatches.stream()
-                .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
-                .collect(Collectors.toList());
-        for (Match match : toDelete) { match.setWinner(null); matchRepo.save(match); }
-        matchRepo.flush();
-        matchRepo.deleteAll(toDelete);
-        matchRepo.flush();
-
-        List<Team> teams = teamRepo.findByDayOrderByMatchesWonDesc(day);
-        for (Team team : teams) { team.getMembers().clear(); teamRepo.save(team); }
-        teamRepo.flush();
-        teamRepo.deleteAll(teams);
-        teamRepo.flush();
+        // On a full restart we regenerate ALL matches from scratch (match #1),
+        // regardless of how many were previously completed.
+        deletePendingMatchesAndTeams(day);
+        int completedCount = 0;
 
         List<TournamentMember> newPresent = req.getPresentMemberIds().stream()
                 .map(id -> memberRepo.findById(id)
@@ -510,6 +456,84 @@ public class TournamentService {
                 ChatMessage.MessageType.SYSTEM);
         broadcastTournament(tournamentId);
         return day;
+    }
+
+    /**
+     * Safely deletes all pending (non-completed) matches for the given day, then
+     * deletes all teams for that day.
+     *
+     * ORDER IS CRITICAL:
+     *   matches.team1 / matches.team2 are FK references to the teams table.
+     *   PostgreSQL will reject "delete from teams" while any match row still
+     *   references that team — even if the match itself is about to be deleted.
+     *
+     *   Correct order:
+     *     1. Null out team1/team2 on ALL matches (incl. completed) → FK refs gone.
+     *     2. Save + flush.
+     *     3. Delete pending matches.
+     *     4. Flush.
+     *     5. Clear team.members (join-table) then delete teams.
+     *     6. Flush.
+     *
+     * @return count of completed matches (so callers can continue match numbering).
+     */
+    /**
+     * Deletes only pending/in-progress matches and their teams, leaving completed
+     * matches and their team references fully intact so match history is preserved.
+     *
+     * WHY THIS ORDER MATTERS (FK constraint):
+     *   matches.team1 / matches.team2 are FK references into the teams table.
+     *   We must NOT touch teams that are still referenced by a completed match.
+     *
+     *   Safe order:
+     *     1. Collect teams used ONLY by pending matches (not by any completed match).
+     *     2. Null out team1/team2 on pending matches only → releases FK from pending side.
+     *     3. Flush, then delete pending matches.
+     *     4. Flush, then clear members join-table and delete orphaned teams.
+     *
+     * @return count of completed matches (so callers can continue match numbering).
+     */
+    private int deletePendingMatchesAndTeams(TournamentDay day) {
+        List<Match> allMatches = matchRepo.findByDayOrderByMatchNumberAsc(day);
+
+        List<Match> completed = allMatches.stream()
+                .filter(m -> m.getStatus() == Match.MatchStatus.COMPLETED)
+                .collect(Collectors.toList());
+        List<Match> pending = allMatches.stream()
+                .filter(m -> m.getStatus() != Match.MatchStatus.COMPLETED)
+                .collect(Collectors.toList());
+
+        // Collect team IDs that completed matches still need — must NOT be deleted
+        Set<Long> preservedTeamIds = new HashSet<>();
+        for (Match m : completed) {
+            if (m.getTeam1() != null) preservedTeamIds.add(m.getTeam1().getId());
+            if (m.getTeam2() != null) preservedTeamIds.add(m.getTeam2().getId());
+        }
+
+        // Step 1 — null out team refs on pending matches only (keeps completed history intact)
+        for (Match m : pending) {
+            m.setWinner(null);
+            m.setTeam1(null);
+            m.setTeam2(null);
+            matchRepo.save(m);
+        }
+        matchRepo.flush();
+
+        // Step 2 — delete pending matches
+        matchRepo.deleteAll(pending);
+        matchRepo.flush();
+
+        // Step 3 — delete only teams that are NOT referenced by any completed match
+        List<Team> allTeams = teamRepo.findByDayOrderByMatchesWonDesc(day);
+        List<Team> orphanTeams = allTeams.stream()
+                .filter(team -> !preservedTeamIds.contains(team.getId()))
+                .collect(Collectors.toList());
+        for (Team team : orphanTeams) { team.getMembers().clear(); teamRepo.save(team); }
+        teamRepo.flush();
+        teamRepo.deleteAll(orphanTeams);
+        teamRepo.flush();
+
+        return completed.size();
     }
 
     // ── MATCH GENERATION ──────────────────────────────────────────────────────
