@@ -1,9 +1,8 @@
 package com.tt.config;
 
-import com.tt.security.JwtAuthFilter;
-import com.tt.security.OAuth2SuccessHandler;
-import com.tt.security.ForceAccountSelectResolver;
+import com.tt.security.ClerkAuthenticationConverter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -14,9 +13,9 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -31,9 +30,10 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AppConfig {
 
-    private final JwtAuthFilter jwtAuthFilter;
-    private final OAuth2SuccessHandler oAuth2SuccessHandler;
-    private final ClientRegistrationRepository clientRegistrationRepository;
+    private final ClerkAuthenticationConverter clerkAuthenticationConverter;
+
+    @Value("${clerk.issuer}")
+    private String clerkIssuer;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -43,33 +43,27 @@ public class AppConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/api/auth/**",
                                 "/api/test-email",
                                 "/ws/**",
                                 "/h2-console/**",
-                                "/api/health",
-                                "/login/oauth2/**",
-                                "/oauth2/**"
+                                "/api/health"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
-                .oauth2Login(oauth2 -> oauth2
-                        .successHandler(oAuth2SuccessHandler)
-                        .failureUrl("/api/auth/oauth2-error")
-                        .authorizationEndpoint(endpoint -> endpoint
-                                .authorizationRequestResolver(
-                                        new ForceAccountSelectResolver(
-                                                new org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver(
-                                                        clientRegistrationRepository,
-                                                        "/oauth2/authorization"
-                                                )
-                                        )
-                                )
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .jwt(jwt -> jwt
+                                .decoder(jwtDecoder())
+                                .jwtAuthenticationConverter(clerkAuthenticationConverter)
                         )
-                )
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                );
         http.headers(h -> h.frameOptions(f -> f.disable()));
         return http.build();
+    }
+
+    @Bean
+    public JwtDecoder jwtDecoder() {
+        // Discovers Clerk's JWKS via OIDC discovery (also enforces the issuer claim)
+        return JwtDecoders.fromIssuerLocation(clerkIssuer);
     }
 
     @Bean

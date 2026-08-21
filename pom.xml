@@ -75,10 +75,10 @@
       <artifactId>spring-boot-starter-mail</artifactId>
     </dependency>
 
-    <!-- OAuth2 (Google / GitHub / LinkedIn social login) -->
+    <!-- Clerk auth: verifies Clerk-issued JWTs via JWKS -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-oauth2-client</artifactId>
+      <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
     </dependency>
 
     <!-- PostgreSQL for Koyeb (production) -->
@@ -92,24 +92,6 @@
     <dependency>
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-
-    <dependency>
-      <groupId>io.jsonwebtoken</groupId>
-      <artifactId>jjwt-api</artifactId>
-      <version>0.12.3</version>
-    </dependency>
-    <dependency>
-      <groupId>io.jsonwebtoken</groupId>
-      <artifactId>jjwt-impl</artifactId>
-      <version>0.12.3</version>
-      <scope>runtime</scope>
-    </dependency>
-    <dependency>
-      <groupId>io.jsonwebtoken</groupId>
-      <artifactId>jjwt-jackson</artifactId>
-      <version>0.12.3</version>
       <scope>runtime</scope>
     </dependency>
 

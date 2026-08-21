@@ -7,21 +7,6 @@ public class DTOs {
 
     // ── REQUESTS ──────────────────────────────────────────────────────────────
 
-    public static class RegisterRequest {
-        private String username, email, password, displayName, proficiency;
-        public String getUsername() { return username; } public void setUsername(String v) { username=v; }
-        public String getEmail() { return email; } public void setEmail(String v) { email=v; }
-        public String getPassword() { return password; } public void setPassword(String v) { password=v; }
-        public String getDisplayName() { return displayName; } public void setDisplayName(String v) { displayName=v; }
-        public String getProficiency() { return proficiency; } public void setProficiency(String v) { proficiency=v; }
-    }
-
-    public static class LoginRequest {
-        private String email, password;
-        public String getEmail() { return email; } public void setEmail(String v) { email=v; }
-        public String getPassword() { return password; } public void setPassword(String v) { password=v; }
-    }
-
     public static class CreateTournamentRequest {
         private String name, password;
         public String getName() { return name; } public void setName(String v) { name=v; }
@@ -104,23 +89,6 @@ public class DTOs {
     }
 
     // ── RESPONSES ─────────────────────────────────────────────────────────────
-
-    public static class AuthResponse {
-        public String token, username, displayName, email, proficiency;
-        public Long userId;
-        public AuthResponse() {}
-        public AuthResponse(String token, String username, String displayName,
-                            String email, Long userId, String proficiency) {
-            this.token=token; this.username=username; this.displayName=displayName;
-            this.email=email; this.userId=userId; this.proficiency=proficiency;
-        }
-        public String getToken() { return token; }
-        public String getUsername() { return username; }
-        public String getDisplayName() { return displayName; }
-        public String getEmail() { return email; }
-        public Long getUserId() { return userId; }
-        public String getProficiency() { return proficiency; }
-    }
 
     public static class TournamentSummaryResponse {
         public Long id; public String name; public int memberCount, adminCount, daysPlayed;

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign in — TT Platform</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#111111; font-family:-apple-system,Helvetica,Arial,sans-serif; }
+    #wrap { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; }
+    #logo { font-size:56px; margin-bottom:4px; }
+    #title { font-size:22px; font-weight:900; color:#FFFFFF; margin-bottom:20px; }
+    #app { width:100%; max-width:400px; }
+    #status { color:#A1A1AA; font-size:14px; margin-top:16px; text-align:center; }
+    #error { color:#F87171; font-size:13px; margin-top:12px; text-align:center; max-width:320px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="logo">🏓</div>
+    <div id="title">TT PLATFORM</div>
+    <div id="app"></div>
+    <div id="status"></div>
+    <div id="error"></div>
+  </div>
+
+  <script>
+    // ─── REPLACE THIS ONE VALUE ──────────────────────────────────────────
+    // Clerk Dashboard > API Keys > Publishable Key (starts with pk_test_ or pk_live_).
+    // The Clerk Frontend API domain is derived from this key automatically
+    // below (Clerk encodes it as base64 inside the key) — you do not need
+    // to type the domain separately anywhere in this file.
+    VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y29tbXVuYWwtbWFrby0xMi5jbGVyay5hY2NvdW50cy5kZXYk;
+
+    // Where this app's backend lives — the callback that mints our own JWT
+    // and redirects back into the mobile app via deep link.
+    var BACKEND_BASE = 'https://tt-bakend.onrender.com';
+  </script>
+
+  <script>
+    function setStatus(msg) { document.getElementById('status').textContent = msg || ''; }
+    function setError(msg) { document.getElementById('error').textContent = msg || ''; }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        var script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Failed to load ' + src));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function main() {
+      try {
+        if (!CLERK_PUBLISHABLE_KEY || CLERK_PUBLISHABLE_KEY.includes('REPLACE_ME')) {
+          setError('Clerk is not configured yet (missing publishable key in clerk-signin.html).');
+          return;
+        }
+
+        // Derive the Clerk Frontend API domain from the publishable key
+        // (Clerk's documented method — see clerk.com/docs/guides/how-clerk-works/overview)
+        var clerkDomain = atob(CLERK_PUBLISHABLE_KEY.split('_')[2]).slice(0, -1);
+
+        setStatus('Loading sign-in…');
+
+        // 1) Load the prebuilt-UI bundle first.
+        await loadScript('https://' + clerkDomain + '/npm/@clerk/ui@latest/dist/ui.browser.js');
+        // 2) Load the core Clerk SDK.
+        await loadScript('https://' + clerkDomain + '/npm/@clerk/clerk-js@latest/dist/clerk.browser.js');
+
+        var clerk = new window.Clerk(CLERK_PUBLISHABLE_KEY);
+        await clerk.load({
+          ui: { ClerkUI: window.__internal_ClerkUICtor },
+          // Dark theme to match a typical Clerk dark-mode look (charcoal
+          // card, white primary button, light borders). These are plain
+          // color strings — no extra import/bundler needed for the
+          // script-tag SDK. Tweak any value to taste.
+          appearance: {
+            variables: {
+              colorPrimary: '#FFFFFF',
+              colorForeground: '#FFFFFF',
+              colorPrimaryForeground: '#111111',
+              colorBackground: '#1A1A1A',
+              colorInputBackground: '#262626',
+              colorInputForeground: '#FFFFFF',
+              colorMutedForeground: '#A1A1AA',
+              colorBorder: '#3F3F46',
+              colorNeutral: '#A1A1AA',
+            },
+          },
+        });
+
+        setStatus('');
+
+        if (clerk.isSignedIn) {
+          await completeLogin(clerk);
+          return;
+        }
+
+        document.getElementById('app').innerHTML = '<div id="sign-in"></div>';
+        clerk.mountSignIn(document.getElementById('sign-in'), {
+          afterSignInUrl: window.location.href,
+          afterSignUpUrl: window.location.href,
+        });
+
+        // Catches the transition to signed-in after mountSignIn succeeds.
+        clerk.addListener(function (payload) {
+          if (payload && payload.session) {
+            completeLogin(clerk);
+          }
+        });
+      } catch (e) {
+        setError('Could not load sign-in. Please check your connection and try again.');
+        console.error(e);
+      }
+    }
+
+    async function completeLogin(clerk) {
+      try {
+        setStatus('Signing you in…');
+        var token = await clerk.session.getToken();
+        if (!token) {
+          setError('Could not retrieve session. Please try again.');
+          return;
+        }
+        // Hand the Clerk token to our backend, which verifies it, finds or
+        // creates the matching Player, and redirects to ttplatform://auth
+        // with our own app JWT — the mobile app's deep-link listener
+        // (AuthScreen in App.tsx) picks this up automatically.
+        window.location.href =
+          BACKEND_BASE + '/api/auth/clerk-callback?session_token=' + encodeURIComponent(token);
+      } catch (e) {
+        setError('Sign-in succeeded but completing login failed. Please try again.');
+        console.error(e);
+      }
+    }
+
+    window.addEventListener('load', main);
+  </script>
+</body>
+</html>

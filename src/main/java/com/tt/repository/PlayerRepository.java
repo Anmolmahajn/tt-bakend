@@ -11,6 +11,7 @@ import java.util.Optional;
 public interface PlayerRepository extends JpaRepository<Player, Long> {
     Optional<Player> findByEmail(String email);
     Optional<Player> findByUsername(String username);
+    Optional<Player> findByClerkId(String clerkId);
     boolean existsByEmail(String email);
     boolean existsByUsername(String username);
     @Query("SELECT p FROM Player p ORDER BY p.totalMatchesWon DESC, p.totalMatchesPlayed ASC")
